@@ -6,7 +6,7 @@ pub enum Frame {
     // 错误
     Error(String),
     // 数字
-    Integer(u64),
+    Integer(i64),
     // 批量字符串
     BulkString(Vec<u8>),
     // 数组
