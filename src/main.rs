@@ -2,14 +2,14 @@ pub mod frame;
 pub mod connection;
 
 use anyhow::Result;
-use time::{UtcOffset, format_description};
-use tokio::io::AsyncWriteExt;
+use time::{format_description};
 use tokio::net::{TcpListener, TcpStream};
 
 use tracing::Instrument;
 use tracing::{info, info_span};
 use tracing_subscriber::fmt;
 use time::macros::offset;
+use crate::connection::Connection;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -40,9 +40,10 @@ pub async fn init_log() {
     tracing_subscriber::fmt().with_timer(timer).init();
 }
 
-pub async fn handle_connection(mut socket: TcpStream) -> Result<()> {
-    let vec = b"HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello world!\n".to_vec();
+pub async fn handle_connection(socket: TcpStream) -> Result<()> {
+    //let vec = b"HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello world!\n".to_vec();
     loop {
-        socket.write_all(&vec).await?;
+        // socket.write_all(&vec).await?;
+        //let connection1 = Connection::new(socket);
     }
 }
