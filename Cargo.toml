@@ -18,3 +18,5 @@ time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 bytes = "1"
 # 高性能查找算法
 memchr = "2"
+# 数字转字节
+itoa = "1.0"

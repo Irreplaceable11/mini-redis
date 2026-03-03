@@ -1,5 +1,6 @@
 pub mod frame;
 pub mod connection;
+mod command;
 
 use anyhow::Result;
 use time::{format_description};
@@ -41,9 +42,27 @@ pub async fn init_log() {
 }
 
 pub async fn handle_connection(socket: TcpStream) -> Result<()> {
-    //let vec = b"HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello world!\n".to_vec();
+    use crate::command::Command;
+    
+    let peer_addr = socket.peer_addr()?;
+    info!("Client connected: {}", peer_addr);
+    
+    let mut conn = Connection::new(socket);
+
     loop {
-        // socket.write_all(&vec).await?;
-        //let connection1 = Connection::new(socket);
+        let frame = match conn.read_frame().await? {
+            Some(frame) => frame,
+            None => break,
+        };
+        
+        match Command::from_frame(frame)? {
+            Command::Ping(cmd) => {
+                let resp = cmd.into_frame();
+                conn.write_frame(&resp).await?;
+            }
+        }
     }
+    
+    info!("Client disconnected: {}", peer_addr);
+    Ok(())
 }
