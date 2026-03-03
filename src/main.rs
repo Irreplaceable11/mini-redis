@@ -2,7 +2,7 @@ pub mod frame;
 pub mod connection;
 mod command;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use time::{format_description};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -24,7 +24,7 @@ async fn main() -> Result<()> {
         let span = info_span!("handle_connection", client_addr = %addr);
         let _ = tokio::spawn(
             async move {
-                handle_connection(socket).await;
+               let _ = handle_connection(socket).await;
             }
             .instrument(span),
         );
@@ -60,6 +60,7 @@ pub async fn handle_connection(socket: TcpStream) -> Result<()> {
                 let resp = cmd.into_frame();
                 conn.write_frame(&resp).await?;
             }
+            _ => return Err(anyhow!("Unsupported command"))
         }
     }
     

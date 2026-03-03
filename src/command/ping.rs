@@ -1,4 +1,5 @@
 use crate::frame::Frame;
+use crate::command::extract_string;
 use anyhow::{anyhow, Result};
 
 pub struct Ping {
@@ -24,22 +25,10 @@ impl Ping {
             0 => Ok(Ping::new(None)),
             // PING "hello"
             1 => {
-                let msg = Ping::extra_string(&args[0])?;
+                let msg = extract_string(&args[0])?;
                 Ok(Ping::new(Some(msg)))
             }
             _ => Err(anyhow!("ERR wrong number of arguments for 'ping' command")),
-        }
-    }
-
-    // 将参数改为接收单个 Frame 的引用，职责更明确
-    fn extra_string(frame: &Frame) -> Result<String> {
-        match frame {
-            Frame::BulkString(s) => {
-                // 使用 from_utf8 的引用版本减少拷贝，
-                let s = std::str::from_utf8(s)?.to_string();
-                Ok(s)
-            }
-            _ => Err(anyhow!("ERR expect BulkString, got other frame type")),
         }
     }
 
