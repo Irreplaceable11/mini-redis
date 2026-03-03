@@ -1,10 +1,16 @@
 mod ping;
+mod set;
+mod parse;
 
 use crate::frame::Frame;
 use anyhow::Result;
 
+// 导出解析辅助函数，供各个命令模块使用
+pub(crate) use parse::{extract_string, extract_bytes, extract_u32, extract_i64, extract_usize};
+
 pub enum Command {
     Ping(ping::Ping),
+    Set(set::Set),
 }
 
 impl Command {
@@ -42,25 +48,6 @@ impl Command {
                 Ok((cmd_name, arr))  // 返回命令名和剩余参数
             }
             _ => Err(anyhow::anyhow!("ERR protocol error: expected array"))
-        }
-    }
-
-
-    // 通用辅助函数
-    fn extract_command_name(frame: &Frame) -> Result<String> {
-        match frame {
-            Frame::Array(arr) => {
-                if arr.is_empty() {
-                    return Err(anyhow::anyhow!("ERR empty array frame"));
-                }
-                match &arr[0] {
-                    Frame::BulkString(bytes) => {
-                        Ok(String::from_utf8(bytes.clone())?.to_uppercase())
-                    },
-                    _ => Err(anyhow::anyhow!("ERR command name must be a bulk string"))
-                }
-            }
-            _ => Err(anyhow::anyhow!("ERR protocol error: expected array")),
         }
     }
 }
