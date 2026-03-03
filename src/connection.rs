@@ -3,7 +3,7 @@ use anyhow::Result;
 use bytes::{Buf, BytesMut};
 use memchr::memmem;
 use std::io::Cursor;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 pub struct Connection {
@@ -43,14 +43,24 @@ impl Connection {
         }
     }
 
+    pub async fn write_frame(&mut self, frame: &Frame) -> Result<()> {
+        // 编码到 buffer
+        frame.encode(&mut self.buffer);
+        // 写出所有数据
+        self.stream.write_all(&self.buffer).await?;
+        // 清空 buffer，为下次写入做准备
+        self.buffer.clear();
+        Ok(())
+    }
+
     pub fn find_crlf(buf: &[u8]) -> Option<usize> {
        /* windows(2) 创建一个滑动窗口，每次看2个字节
         比如 b"+OK\r\n" -> 窗口序列: [b'+', b'O'], [b'O', b'K'], [b'K', b'\r'], [b'\r', b'\n']
         buf.windows(2)
             .position(|window| window == b"\r\n")
-            // 加上2，因为 \r\n 占2个字节
             .map(|pos| pos + 2)*/
         // 经过比较 选用memmem使用SIMD优化，因为windows会创建大量切片
+        // 查找 \r\n 并返回包含 \r\n 的长度
         memmem::find(buf, b"\r\n").map(|pos| pos + 2)
     }
 
@@ -292,21 +302,5 @@ impl Connection {
         //     },
         //     None => Ok(None),
         // }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_grep() {
-        // let option = Connection::find_crlf(b"GET / HTTP/1.1\r\n\r\n");
-        // println!("{:?}", option.unwrap());
-        let mut bytes_mut = BytesMut::new();
-        bytes_mut.extend_from_slice((b"+OK\r\n"));
-
-
-        println!("{:?}", std::str::from_utf8(&bytes_mut[0..bytes_mut.len() - 2]).unwrap());
     }
 }
