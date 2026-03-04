@@ -1,8 +1,12 @@
-
-use crate::{command::{extract_u32, parse::extract_u64}, frame::Frame};
+use std::time::{Duration, Instant};
+use crate::{
+    command::parse::extract_u64,
+    frame::Frame,
+};
 use anyhow::{anyhow, Result};
 
-use crate::command::{extract_bytes, extract_string};
+use crate::command::{extract_bytes, extract_string, CommandExecute};
+use crate::db::Db;
 
 pub struct Set {
     pub key: String,
@@ -11,18 +15,30 @@ pub struct Set {
 
     pub ttl: Option<Expiration>,
 
-    pub nx: Option<bool>,
+    pub nx: bool,
 
-    pub xx: Option<bool>
+    pub xx: bool,
 }
 
-enum Expiration {
+pub enum Expiration {
     Seconds(u64),
     Milliseconds(u64),
 }
 impl Set {
-    pub fn new(key: String, value: Vec<u8>, ttl: Option<Expiration>, nx: Option<bool>, xx: Option<bool>) -> Self {
-        Set { key, value, ttl , nx, xx}
+    pub fn new(
+        key: String,
+        value: Vec<u8>,
+        ttl: Option<Expiration>,
+        nx: bool,
+        xx: bool,
+    ) -> Self {
+        Set {
+            key,
+            value,
+            ttl,
+            nx,
+            xx,
+        }
     }
 
     pub fn parse(args: &[Frame]) -> Result<Set> {
@@ -33,26 +49,83 @@ impl Set {
         let key = extract_string(&args[0])?;
 
         let value = extract_bytes(&args[1])?;
-        // for循环提取参数
-        for arg in &args[2..args.len() -1] {
-            let ttl_type = extract_string(arg)?;
-            if ttl_type.to_uppercase() == "EX" {
-                
+
+        // 循环提取参数
+
+        let mut ttl = None;
+        let mut nx = false;
+        let mut xx = false;
+        // 从2开始排除key value
+        let mut idx = 2;
+        while idx < args.len() {
+            let keyword = extract_string(&args[idx])?.to_uppercase();
+            // EX PX不需要互斥 后者覆盖前者
+            match keyword.as_str() {
+                "EX" => {
+                    if idx + 1 >= args.len() {
+                        return Err(anyhow!("ERR syntax error: option '{}' requires an argument", keyword));
+                    }
+                    let val = extract_u64(&args[idx + 1])?;
+                    ttl = Some(Expiration::Seconds(val));
+                    idx += 2;
+                }
+
+                "PX" => {
+                    if idx + 1 >= args.len() {
+                        return Err(anyhow!("ERR syntax error: option '{}' requires an argument", keyword));
+                    }
+                    let val = extract_u64(&args[idx + 1])?;
+                    ttl = Some(Expiration::Milliseconds(val));
+                    idx += 2;
+                }
+
+                "NX" => {
+                    if xx {
+                        return Err(anyhow!("ERR XX and NX options at the same time are not compatible"));
+                    }
+                    nx = true;
+                    idx += 1;
+                }
+
+                "XX" => {
+                    if nx {
+                        return Err(anyhow!("ERR XX and NX options at the same time are not compatible"));
+                    }
+                    xx = true;
+                    idx += 1;
+                }
+
+                _ => {
+                    // 遇到不认识的关键字
+                    return Err(anyhow!("ERR syntax error: unknown option '{}'", keyword));
+                }
             }
         }
 
-        let ttl = match args.len() {
-            // 只有key value 永不过期
-            2 => None,
-            4 => {
-                match extract_u64(&args[3]) {
-                    Ok(ttl) => Some(ttl),
-                    Err(_) => return Err(anyhow!("Err ttl for 'set' command"))
-                }
-            }
-            _ => return Err(anyhow!("ERR wrong number of arguments for 'set' command"))
-        };
+        Ok(Set::new(key, value, ttl, nx, xx))
+    }
 
-        Ok(Set::new(key, value, ttl, Some(false), Some(true)))
+    pub fn expires_at_direct(&self) -> Option<Instant> {
+        match &self.ttl {
+            Some(exp) => {
+                let duration = match exp {
+                    Expiration::Seconds(secs) => Duration::from_secs(*secs),
+                    Expiration::Milliseconds(ms) => Duration::from_millis(*ms),
+                };
+                Some(Instant::now() + duration)
+            }
+            None => None,
+        }
+    }
+}
+
+impl CommandExecute for Set {
+    fn execute(self, db: &Db) -> Frame {
+        let instant = self.expires_at_direct();
+        match db.set(self.key.as_ref(), self.value, instant, self.nx, self.xx) {
+            Some(_) => Frame::SimpleString("OK".to_string()),
+            None => Frame::Null
+        }
+
     }
 }
