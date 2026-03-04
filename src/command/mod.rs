@@ -1,17 +1,40 @@
 mod ping;
 mod set;
 mod parse;
+mod get;
 
 use crate::frame::Frame;
 use anyhow::Result;
-
+use tracing::info;
 // 导出解析辅助函数，供各个命令模块使用
 pub(crate) use parse::{extract_string, extract_bytes, extract_u32, extract_i64, extract_usize};
+use crate::db::Db;
+
+pub(crate) trait CommandExecute {
+    fn execute(self, db: &Db) -> Frame;
+}
+
 
 pub enum Command {
+    // TODO 增加 DEL EXISTS TTL PTTL EXPIRE KEYS 
     Ping(ping::Ping),
     Set(set::Set),
+    Get(get::Get),
+    Unknown(String),
 }
+
+impl Command {
+    pub fn execute(self, db: &Db) -> Frame {
+        match self {
+            Command::Ping(cmd) => cmd.execute(db),
+            Command::Set(cmd) => cmd.execute(db),
+            Command::Get(cmd) => cmd.execute(db),
+            Command::Unknown(cmd) => Frame::Error(format!("unknown command:{:?}", cmd)),
+        }
+    }
+}
+
+
 
 impl Command {
     
@@ -24,7 +47,12 @@ impl Command {
 
         match cmd_name.as_str() {
             "PING" => Ok(Command::Ping(ping::Ping::parse(&arg)?)),
-            _ => Err(anyhow::anyhow!("ERR unknown command '{}'", cmd_name))
+            "SET" => Ok(Command::Set(set::Set::parse(&arg)?)),
+            "GET" => Ok(Command::Get(get::Get::parse(&arg)?)),
+            _ => {
+                info!("unknown command: {}", cmd_name);
+                Ok(Command::Unknown(cmd_name))
+            }
         }
     }
 
