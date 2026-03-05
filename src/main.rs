@@ -4,9 +4,10 @@ mod command;
 mod db;
 
 use std::sync::Arc;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use time::{format_description};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::time::{interval, Duration};
 
 use tracing::Instrument;
 use tracing::{info, info_span};
@@ -21,12 +22,26 @@ async fn main() -> Result<()> {
     let listener = TcpListener::bind(("127.0.0.1", 6377)).await?;
     info!("mini redis listening on {:?}", listener.local_addr()?);
     let db_arc = Arc::new(Db::new());
+    let arc1 = db_arc.clone();
+    tokio::spawn(async move {
+        info!("starting db clean up");
+        tokio::time::sleep(Duration::from_secs(5 * 60)).await;
+
+        // 2. 创建周期性定时器：每 30 秒一次
+        let mut intv = interval(Duration::from_secs(30));
+        loop {
+            intv.tick().await; // 等待下一个 30 秒时间点
+
+            // 执行清理
+            arc1.clean_up();
+        }
+    });
     loop {
         let (socket, addr) = listener.accept().await?;
 
         let span = info_span!("handle_connection", client_addr = %addr);
         let db = db_arc.clone();
-        let _ = tokio::spawn(
+        tokio::spawn(
             async move {
                let _ = handle_connection(socket, db).await;
             }
@@ -58,19 +73,17 @@ pub async fn handle_connection(socket: TcpStream, db: Arc<Db>) -> Result<()> {
             Some(frame) => frame,
             None => break,
         };
-        let cmd = Command::from_frame(frame)?;
-        let resp = Command::execute(cmd, &db);
-        conn.write_frame(&resp).await?;
-        // match Command::from_frame(frame)? {
-        //     Command::Ping(cmd) => {
-        //         let resp = cmd.into_frame();
-        //         conn.write_frame(&resp).await?;
-        //     }
-        //     Command::Set(cmd) => {
-        //
-        //     }
-        //     _ => return Err(anyhow!("Unsupported command"))
-        // }
+        let cmd = Command::from_frame(frame);
+        match cmd {
+            Ok(cmd) => {
+                let resp = Command::execute(cmd, &db);
+                conn.write_frame(&resp).await?
+            }
+            Err(err) => {
+                conn.write_frame(&frame::Frame::Error(err.to_string())).await?
+            }
+        }
+      
     }
     
     info!("Client disconnected: {}", peer_addr);

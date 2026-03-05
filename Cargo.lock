@@ -112,6 +112,7 @@ dependencies = [
  "bytes",
  "itoa",
  "memchr",
+ "parking_lot",
  "time",
  "tokio",
  "tokio-util",

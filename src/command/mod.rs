@@ -2,6 +2,7 @@ mod ping;
 mod set;
 mod parse;
 mod get;
+mod del;
 
 use crate::frame::Frame;
 use anyhow::Result;
@@ -16,10 +17,11 @@ pub(crate) trait CommandExecute {
 
 
 pub enum Command {
-    // TODO 增加 DEL EXISTS TTL PTTL EXPIRE KEYS 
+    // TODO 增加 EXISTS TTL PTTL EXPIRE KEYS
     Ping(ping::Ping),
     Set(set::Set),
     Get(get::Get),
+    Del(del::Del),
     Unknown(String),
 }
 
@@ -29,6 +31,7 @@ impl Command {
             Command::Ping(cmd) => cmd.execute(db),
             Command::Set(cmd) => cmd.execute(db),
             Command::Get(cmd) => cmd.execute(db),
+            Command::Del(cmd) => cmd.execute(db),
             Command::Unknown(cmd) => Frame::Error(format!("unknown command:{:?}", cmd)),
         }
     }
@@ -49,6 +52,7 @@ impl Command {
             "PING" => Ok(Command::Ping(ping::Ping::parse(&arg)?)),
             "SET" => Ok(Command::Set(set::Set::parse(&arg)?)),
             "GET" => Ok(Command::Get(get::Get::parse(&arg)?)),
+            "DEL" => Ok(Command::Del(del::Del::parse(&arg)?)),
             _ => {
                 info!("unknown command: {}", cmd_name);
                 Ok(Command::Unknown(cmd_name))

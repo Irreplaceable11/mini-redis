@@ -1,11 +1,12 @@
-use crate::{command::CommandExecute, frame::Frame};
 use crate::command::extract_string;
-use anyhow::{anyhow, Result};
 use crate::db::Db;
+use crate::{command::CommandExecute, frame::Frame};
+use anyhow::{anyhow, Result};
 
 pub struct Ping {
     pub msg: Option<String>,
 }
+const PONG: &str = "PONG";
 
 impl Ping {
 
@@ -38,7 +39,7 @@ impl Ping {
 impl CommandExecute for Ping {
     fn execute(self, _db: &Db) -> Frame {
          match self.msg {
-            None => Frame::SimpleString("PONG".to_string()),
+            None => Frame::SimpleString(PONG.into()),
             Some(msg) => Frame::BulkString(msg.into())
         }
     }
