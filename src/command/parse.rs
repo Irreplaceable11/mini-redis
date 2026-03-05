@@ -3,7 +3,6 @@ use anyhow::{anyhow, Result};
 
 /// 命令解析辅助函数集合
 /// 用于从 Frame 中提取各种类型的数据
-
 /// 从 Frame 中提取字符串
 /// 用于解析命令参数中的字符串类型（如 key、选项名等）
 pub fn extract_string(frame: &Frame) -> Result<String> {

@@ -20,3 +20,4 @@ bytes = "1"
 memchr = "2"
 # 数字转字节
 itoa = "1.0"
+parking_lot = "0.12.5"

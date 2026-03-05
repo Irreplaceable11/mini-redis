@@ -10,6 +10,8 @@ pub struct Connection {
     stream: TcpStream,
 
     buffer: BytesMut,
+
+    write_buffer: BytesMut
 }
 
 const MAX_BULK_LENGTH: usize = 512 * 1024 * 1024;
@@ -18,7 +20,8 @@ impl Connection {
     pub fn new(stream: TcpStream) -> Self {
         Connection {
             stream,
-            buffer: BytesMut::with_capacity(4096)
+            buffer: BytesMut::with_capacity(4096),
+            write_buffer: BytesMut::with_capacity(4096)
         }
     }
 
@@ -45,11 +48,11 @@ impl Connection {
 
     pub async fn write_frame(&mut self, frame: &Frame) -> Result<()> {
         // 编码到 buffer
-        frame.encode(&mut self.buffer);
+        frame.encode(&mut self.write_buffer);
         // 写出所有数据
-        self.stream.write_all(&self.buffer).await?;
+        self.stream.write_all(&self.write_buffer).await?;
         // 清空 buffer，为下次写入做准备
-        self.buffer.clear();
+        self.write_buffer.clear();
         Ok(())
     }
 
