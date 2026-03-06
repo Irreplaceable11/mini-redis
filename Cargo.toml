@@ -21,3 +21,18 @@ memchr = "2"
 # 数字转字节
 itoa = "1.0"
 parking_lot = "0.12.5"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "db_bench"
+harness = false
+
+[[bench]]
+name = "frame_bench"
+harness = false
+
+[[bench]]
+name = "command_bench"
+harness = false
