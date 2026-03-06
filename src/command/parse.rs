@@ -1,5 +1,6 @@
 use crate::frame::Frame;
 use anyhow::{anyhow, Result};
+use bytes::Bytes;
 
 /// 命令解析辅助函数集合
 /// 用于从 Frame 中提取各种类型的数据
@@ -17,7 +18,7 @@ pub fn extract_string(frame: &Frame) -> Result<String> {
 
 /// 从 Frame 中提取字节数组
 /// 用于解析二进制数据（如 Redis 的 value）
-pub fn extract_bytes(frame: &Frame) -> Result<Vec<u8>> {
+pub fn extract_bytes(frame: &Frame) -> Result<Bytes> {
     match frame {
         Frame::BulkString(bytes) => Ok(bytes.clone()),
         _ => Err(anyhow!("ERR expect BulkString")),

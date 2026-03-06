@@ -1,4 +1,4 @@
-use bytes::{BufMut, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 
 #[derive(Debug)]
 pub enum Frame {
@@ -9,7 +9,7 @@ pub enum Frame {
     // 数字
     Integer(i64),
     // 批量字符串
-    BulkString(Vec<u8>),
+    BulkString(Bytes),
     // 数组
     Array(Vec<Frame>),
 

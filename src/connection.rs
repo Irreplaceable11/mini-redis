@@ -8,38 +8,33 @@ use tokio::net::TcpStream;
 
 pub struct Connection {
     stream: TcpStream,
-
     buffer: BytesMut,
-
-    write_buffer: BytesMut
+    write_buffer: BytesMut,
 }
 
 const MAX_BULK_LENGTH: usize = 512 * 1024 * 1024;
+
 impl Connection {
-    // 初始化connection
     pub fn new(stream: TcpStream) -> Self {
         Connection {
             stream,
             buffer: BytesMut::with_capacity(4096),
-            write_buffer: BytesMut::with_capacity(4096)
+            write_buffer: BytesMut::with_capacity(4096),
         }
     }
 
-    pub async fn read_frame(&mut self) -> Result<Option<Frame>>{
-        // 循环读取stream数据，直接获取整个frame
+    pub async fn read_frame(&mut self) -> Result<Option<Frame>> {
         loop {
             match self.try_read_frame()? {
                 Some(frame) => return Ok(Some(frame)),
                 None => {
                     let n = self.stream.read_buf(&mut self.buffer).await?;
-                    // 读不到说明客户端以关闭
                     if n == 0 {
-                        // 读取到 0 字节，说明对方关闭了连接
                         return if self.buffer.is_empty() {
                             Ok(None)
                         } else {
                             Err(anyhow::anyhow!("Connection closed with incomplete frame"))
-                        }
+                        };
                     }
                 }
             }
@@ -47,25 +42,17 @@ impl Connection {
     }
 
     pub async fn write_frame(&mut self, frame: &Frame) -> Result<()> {
-        // 编码到 buffer
         frame.encode(&mut self.write_buffer);
-        // 写出所有数据
         self.stream.write_all(&self.write_buffer).await?;
-        // 清空 buffer，为下次写入做准备
         self.write_buffer.clear();
         Ok(())
     }
 
     pub fn find_crlf(buf: &[u8]) -> Option<usize> {
-       /* windows(2) 创建一个滑动窗口，每次看2个字节
-        比如 b"+OK\r\n" -> 窗口序列: [b'+', b'O'], [b'O', b'K'], [b'K', b'\r'], [b'\r', b'\n']
-        buf.windows(2)
-            .position(|window| window == b"\r\n")
-            .map(|pos| pos + 2)*/
-        // 经过比较 选用memmem使用SIMD优化，因为windows会创建大量切片
-        // 查找 \r\n 并返回包含 \r\n 的长度
         memmem::find(buf, b"\r\n").map(|pos| pos + 2)
     }
+
+    // ==================== 第一阶段：检查帧完整性（Cursor，只读不消费） ====================
 
     /// RESP 协议类型标记 (第一个字节)
     ///
@@ -75,120 +62,53 @@ impl Connection {
     /// '$' : 批量字符串 (Bulk String) -> $5\r\nhello\r\n (先读长度，再读数据)
     /// '*' : 数组 (Array)             -> *2\r\n... (先读个数，再读元素)
     pub fn try_read_frame(&mut self) -> Result<Option<Frame>> {
-
         if self.buffer.is_empty() {
             return Ok(None);
         }
 
-        let mut src = Cursor::new(&self.buffer[..]);
-        // let type_byte = self.buffer[0];
-        // 如果不够解析最小头部，返回 Ok(None)
-        match self.parse_frame(&mut src) {
-           Ok(frame) => {
-               let len = src.position() as usize;
-               // 现在才真正地从 buffer 中移除数据
-               self.buffer.advance(len);
-               Ok(Some(frame))
-           },
-            Err(err) => {
-                // Incomplete表示数据不全
-                if err.to_string().contains("Incomplete") {
-                    return Ok(None);
-                }
-                Err(err)
-            }
-        }
+        // 第一阶段：用 Cursor 检查帧是否完整，拿到总长度
+        let len = match self.check_frame_complete() {
+            Ok(Some(len)) => len,
+            Ok(None) => return Ok(None),
+            Err(e) if e.to_string().contains("Incomplete") => return Ok(None),
+            Err(e) => return Err(e),
+        };
+
+        // 第二阶段：从 buffer 中切出这段数据，做真正的解析
+        // split_to 把 buffer 一分为二，前半段是独立的 BytesMut
+        let mut frame_buf = self.buffer.split_to(len);
+        Self::parse_frame(&mut frame_buf).map(Some)
     }
 
-    fn parse_frame(& self, src: &mut Cursor<&[u8]>) -> Result<Frame> {
-        let type_byte = self.peek_u8(src)?;
+    fn check_frame_complete(&self) -> Result<Option<usize>> {
+        let mut cursor = Cursor::new(&self.buffer[..]);
+        self.check_frame_complete_inner(&mut cursor)
+    }
+
+    fn check_frame_complete_inner(&self, cursor: &mut Cursor<&[u8]>) -> Result<Option<usize>> {
+        let type_byte = self.peek_u8(cursor)?;
         match type_byte {
-            b'+' | b'-' | b':' => self.do_parse_simple_type(src),
-            b'$' => self.do_parse_bulk_string(src),
-            b'*' => self.do_parse_array(src), // 递归入口
+            b'+' | b'-' | b':' => self.check_simple_type(cursor),
+            b'$' => self.check_bulk_string(cursor),
+            b'*' => self.check_array(cursor),
             _ => Err(anyhow::anyhow!("Unexpected frame type: {}", type_byte)),
         }
     }
 
-    // 看一眼第一个字节，但不移动指针
-    fn peek_u8(&self, src: &mut Cursor<&[u8]>) -> Result<u8> {
-        if !src.has_remaining() {
-            return Err(anyhow::anyhow!("Incomplete"));
-        }
-        let b = src.chunk()[0]; // chunk() 返回当前指针指向的数据
-        Ok(b)
-    }
-
-    // 从 Cursor 中读取一行，直到 \r\n
-    fn read_line<'a>(&self, src: &mut Cursor<&'a [u8]>) -> Result<&'a [u8]> {
-        // 获取当前位置之后的所有剩余数据
+    fn check_simple_type(&self, src: &mut Cursor<&[u8]>) -> Result<Option<usize>> {
+        let _type_byte = src.get_u8(); // 消耗 '+' '-' ':'
         let start = src.position() as usize;
         let end = src.get_ref().len();
-
-        // 在剩余数据中找 CRLF
         match Self::find_crlf(&src.get_ref()[start..end]) {
             Some(len) => {
-                // 找到了！移动 Cursor 的位置
                 src.set_position((start + len) as u64);
-                // 返回这一行的切片
-                Ok(&src.get_ref()[start..start + len])
+                Ok(Some(start + len))
             }
-            None => Err(anyhow::anyhow!("Incomplete")), // 数据还没传完
+            None => Err(anyhow::anyhow!("Incomplete")),
         }
     }
 
-
-    fn do_parse_simple_type(& self, src: &mut Cursor<&[u8]>) -> Result<Frame> {
-        // 1. 获取当前字节（类型标识），Cursor 后移 1 位
-        let type_byte = src.get_u8();
-
-        // 2. 直接读取剩余的一整行（包含 \r\n）
-        // 注意：这里的 read_line 是基于当前 Cursor 位置开始读的
-        let line = self.read_line(src)?;
-
-        // 3. 这里的 line 是由 read_line 返回的截断切片，已经排除了类型字节
-        // 但它结尾还带着 \r\n，所以需要去掉最后两个字节
-        if line.len() < 2 {
-            return Err(anyhow::anyhow!("Invalid simple type frame"));
-        }
-
-        let content = &line[..line.len() - 2];
-        let string = std::str::from_utf8(content)?.to_string();
-
-        match type_byte {
-            b'+' => Ok(Frame::SimpleString(string)),
-            b'-' => Ok(Frame::Error(string)),
-            b':' => Ok(Frame::Integer(string.parse()?)),
-            _ => unreachable!(), // parse_frame 已经过滤了类型
-        }
-
-
-        // match Self::find_crlf(&self.buffer) {
-        //     Some(pos) => {
-        //         let type_byte = self.buffer[0];
-        //         // 健壮性检查：防止空行或过短帧
-        //         // 最小合法帧: "+\r\n" (长度3).
-        //         // end_pos 指向 \n 之后，所以 end_pos 至少应该是 3.
-        //         if pos < 3 {
-        //             return Err(anyhow::anyhow!("Invalid frame: too short"));
-        //         }
-        //         // 从缓冲区提取数据
-        //         let line = self.buffer.split_to(pos);
-        //         // 去掉 + \r\n
-        //         let content = &line[1..line.len() - 2];
-        //         let string = str::from_utf8(content)?.to_string();
-        //         match type_byte {
-        //             b'+' => Ok(Frame::SimpleString(string)) ,
-        //             b'-' => Ok(Frame::Error(string)),
-        //             b':' => Ok(Frame::Integer(string.parse()?)),
-        //             _ => unreachable!()
-        //         }
-        //     },
-        //     None => {Err(anyhow::anyhow!("Incomplete frame"))}
-        // }
-    }
-
-    fn do_parse_bulk_string (& self,  src: &mut Cursor<&[u8]>) -> Result<Frame> {
+    fn check_bulk_string(&self, src: &mut Cursor<&[u8]>) -> Result<Option<usize>> {
         let _type_byte = src.get_u8(); // 消耗 '$'
 
         // 第一步：读长度行
@@ -196,114 +116,136 @@ impl Connection {
         let length = std::str::from_utf8(&line[..line.len() - 2])?.parse::<isize>()?;
 
         if length == -1 {
-            return Ok(Frame::Null);
+            return Ok(Some(src.position() as usize));
         }
 
         let data_len = length as usize;
         if data_len > MAX_BULK_LENGTH {
             return Err(anyhow::anyhow!("Bulk string too large"));
         }
-
         // 第二步：确保数据体 + \r\n 都在缓冲区里
-        let total_data_part = data_len + 2; // 数据加上结尾的 \r\n
+        let total_data_part = data_len + 2;
         if src.remaining() < total_data_part {
-            return Err(anyhow::anyhow!("Incomplete")); // 触发外层回滚
+            return Err(anyhow::anyhow!("Incomplete"));
         }
-
-        // 提取数据（不包含最后的 \r\n）
-        let start = src.position() as usize;
-        let data = src.get_ref()[start..start + data_len].to_vec();
-
-        // 记得手动把 Cursor 挪过这段数据和最后的 \r\n
         src.advance(total_data_part);
-
-        Ok(Frame::BulkString(data))
-        // match Self::find_crlf(&self.buffer) {
-        //     Some(pos) => {
-        //         let line = &self.buffer[0..pos];
-        //         // 最小 "$-1\r\n"占四字节
-        //         if line.len() < 4 {
-        //             return Err(anyhow::anyhow!("Invalid bulk string header"));
-        //         }
-        //         // 获取长度字符串
-        //         let length_str = &line[1..line.len() - 2];
-        //         let length = str::from_utf8(length_str)?.parse::<isize>()?;
-        //         // -1说明为null
-        //         if length == -1 {
-        //             self.buffer.advance(pos);  // 消耗头部
-        //             return Ok(Some(Frame::Null));
-        //         }
-        //         // 拒绝负数
-        //         if length < 0 {
-        //             return Err(anyhow::anyhow!("Invalid bulk string length:{}", length));
-        //         }
-        //
-        //         let data_length = length as usize;
-        //         if data_length > MAX_BULK_LENGTH {
-        //             return Err(anyhow::anyhow!("Bulk string too large"));
-        //         }
-        //
-        //         // 总长度 = 头部长度(pos) + 数据长度 + 结尾的 \r\n (2字节)
-        //         let total_len = pos + data_length + 2;
-        //         if self.buffer.len() < total_len {
-        //             return Ok(None);// 数据还没传完
-        //         }
-        //
-        //         let data_with_header = self.buffer.split_to(total_len);
-        //         let vec = data_with_header[pos..pos + data_length].to_vec();
-        //
-        //         Ok(Some(Frame::BulkString(vec)))
-        //     },
-        //     None => Ok(None),
-        // }
+        Ok(Some(src.position() as usize))
     }
 
-    fn do_parse_array (& self, src: & mut Cursor<&[u8]>) -> Result<Frame> {
-        // 1. 读取数组长度行，例如 "*3\r\n"
+    fn check_array(&self, src: &mut Cursor<&[u8]>) -> Result<Option<usize>> {
+        let _type_byte = src.get_u8(); // 消耗 '*'
         let line = self.read_line(src)?;
-        let length = std::str::from_utf8(&line[1..line.len()-2])?.parse::<isize>()?;
+        let length = std::str::from_utf8(&line[..line.len() - 2])?.parse::<isize>()?;
 
-        if length == -1 { return Ok(Frame::Null); }
+        if length == -1 {
+            return Ok(Some(src.position() as usize));
+        }
         let array_len = length as usize;
+        for _ in 0..array_len {
+            self.check_frame_complete_inner(src)?;
+        }
+        Ok(Some(src.position() as usize))
+    }
 
+    // --- Cursor 辅助方法（用于 check 阶段）---
+
+    // 看一眼第一个字节，但不移动指针
+    fn peek_u8(&self, src: &mut Cursor<&[u8]>) -> Result<u8> {
+        if !src.has_remaining() {
+            return Err(anyhow::anyhow!("Incomplete"));
+        }
+        let b = src.chunk()[0];
+        Ok(b)
+    }
+
+    // 从 Cursor 中读取一行，直到 \r\n
+    fn read_line<'a>(&self, src: &mut Cursor<&'a [u8]>) -> Result<&'a [u8]> {
+        let start = src.position() as usize;
+        let end = src.get_ref().len();
+        match Self::find_crlf(&src.get_ref()[start..end]) {
+            Some(len) => {
+                src.set_position((start + len) as u64);
+                Ok(&src.get_ref()[start..start + len])
+            }
+            None => Err(anyhow::anyhow!("Incomplete")),
+        }
+    }
+
+    // ==================== 第二阶段：真正解析（BytesMut，消费式，零拷贝） ====================
+    // 此时帧数据已经通过 split_to 切出来了，可以放心地消费
+
+    /// 从 BytesMut 中解析一个 Frame
+    /// BytesMut 的 get_u8() 会消费数据（自动 advance），split_to() 零拷贝切割
+    fn parse_frame(src: &mut BytesMut) -> Result<Frame> {
+        let type_byte = src.get_u8(); // 消费类型字节
+        match type_byte {
+            b'+' | b'-' | b':' => Self::parse_simple_type(type_byte, src),
+            b'$' => Self::parse_bulk_string(src),
+            b'*' => Self::parse_array(src),
+            _ => Err(anyhow::anyhow!("Unexpected frame type: {}", type_byte)),
+        }
+    }
+
+    /// 解析简单类型：SimpleString / Error / Integer
+    fn parse_simple_type(type_byte: u8, src: &mut BytesMut) -> Result<Frame> {
+        // 找到 \r\n 的位置
+        let crlf_pos = Self::find_crlf(src)
+            .ok_or_else(|| anyhow::anyhow!("Incomplete"))?;
+
+        // split_to 切出这一行（包含 \r\n），src 中剩余后面的数据
+        let line = src.split_to(crlf_pos);
+        // 去掉末尾的 \r\n
+        let content = &line[..line.len() - 2];
+        let string = std::str::from_utf8(content)?.to_string();
+
+        match type_byte {
+            b'+' => Ok(Frame::SimpleString(string)),
+            b'-' => Ok(Frame::Error(string)),
+            b':' => Ok(Frame::Integer(string.parse()?)),
+            _ => unreachable!(),
+        }
+    }
+
+    /// 解析 BulkString，这里是零拷贝的关键！
+    fn parse_bulk_string(src: &mut BytesMut) -> Result<Frame> {
+        // 读长度行
+        let crlf_pos = Self::find_crlf(src)
+            .ok_or_else(|| anyhow::anyhow!("Incomplete"))?;
+        let header = src.split_to(crlf_pos);
+        let length = std::str::from_utf8(&header[..header.len() - 2])?.parse::<isize>()?;
+
+        if length == -1 {
+            return Ok(Frame::Null);
+        }
+
+        let data_len = length as usize;
+
+        // 零拷贝核心：split_to 切出数据部分，freeze 转成不可变的 Bytes
+        let data = src.split_to(data_len).freeze();
+
+        // 跳过结尾的 \r\n
+        src.advance(2);
+
+        Ok(Frame::BulkString(data))
+    }
+
+    /// 解析数组，递归调用 parse_frame
+    fn parse_array(src: &mut BytesMut) -> Result<Frame> {
+        let crlf_pos = Self::find_crlf(src)
+            .ok_or_else(|| anyhow::anyhow!("Incomplete"))?;
+        let header = src.split_to(crlf_pos);
+        let length = std::str::from_utf8(&header[..header.len() - 2])?.parse::<isize>()?;
+
+        if length == -1 {
+            return Ok(Frame::Null);
+        }
+
+        let array_len = length as usize;
         let mut frames = Vec::with_capacity(array_len);
         for _ in 0..array_len {
-            // 2. 关键递归：调用 parse_frame，传入同一个 src
-            // 它会继续往后读，直到填满这个数组
-            frames.push(self.parse_frame(src)?);
+            frames.push(Self::parse_frame(src)?);
         }
 
         Ok(Frame::Array(frames))
-        // match Self::find_crlf(&self.buffer) {
-        //     Some(pos) => {
-        //         let line = &self.buffer[0..pos];
-        //         let len_str = &line[1..line.len() - 2];
-        //
-        //         let length = std::str::from_utf8(&len_str)?.parse::<isize>()?;
-        //
-        //         if length == -1 {
-        //             self.buffer.advance(pos);  // 消耗头部
-        //             return Ok(Some(Frame::Null));
-        //         }
-        //         // 去除非法请求
-        //         if length < 0 {
-        //             return Err(anyhow::anyhow!("Invalid array length:{}", length));
-        //         }
-        //         let array_length = length as usize;
-        //         if array_length > MAX_BULK_LENGTH {
-        //             return Err(anyhow::anyhow!("Bulk string too large"));
-        //         }
-        //
-        //         let mut frames: Vec<Frame> = Vec::with_capacity(array_length);
-        //
-        //         for _ in 0..array_length {
-        //             //     处理每个类型
-        //         }
-        //
-        //
-        //         Ok(Some(Frame::Array(frames)))
-        //     },
-        //     None => Ok(None),
-        // }
     }
 }

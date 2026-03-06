@@ -4,6 +4,7 @@ use crate::{
     frame::Frame,
 };
 use anyhow::{anyhow, Result};
+use bytes::Bytes;
 
 use crate::command::{extract_bytes, extract_string, CommandExecute};
 use crate::db::Db;
@@ -11,7 +12,7 @@ use crate::db::Db;
 pub struct Set {
     pub key: String,
 
-    pub value: Vec<u8>,
+    pub value: Bytes,
 
     pub ttl: Option<Expiration>,
 
@@ -27,7 +28,7 @@ pub enum Expiration {
 impl Set {
     pub fn new(
         key: String,
-        value: Vec<u8>,
+        value: Bytes,
         ttl: Option<Expiration>,
         nx: bool,
         xx: bool,
@@ -122,7 +123,7 @@ impl Set {
 impl CommandExecute for Set {
     fn execute(self, db: &Db) -> Frame {
         let instant = self.expires_at_direct();
-        match db.set(self.key.as_ref(), self.value, instant, self.nx, self.xx) {
+        match db.set(self.key, self.value, instant, self.nx, self.xx) {
             Some(_) => Frame::SimpleString("OK".to_string()),
             None => Frame::Null
         }
