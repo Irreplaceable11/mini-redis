@@ -2,7 +2,7 @@ use crate::frame::Frame;
 use anyhow::Result;
 use bytes::{Buf, BytesMut};
 use memchr::memmem;
-use std::io::Cursor;
+use std::io::{Cursor};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 

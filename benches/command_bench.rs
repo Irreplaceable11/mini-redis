@@ -1,4 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
+use bytes::Bytes;
 use mini_redis::command::Command;
 use mini_redis::db::Db;
 use mini_redis::frame::Frame;
@@ -6,7 +7,7 @@ use mini_redis::frame::Frame;
 /// 构造一个模拟的 RESP 命令 Frame
 fn make_cmd_frame(parts: &[&[u8]]) -> Frame {
     Frame::Array(
-        parts.iter().map(|p| Frame::BulkString(p.to_vec())).collect()
+        parts.iter().map(|p| Frame::BulkString(p.to_vec().into())).collect()
     )
 }
 
@@ -86,9 +87,9 @@ fn bench_execute(c: &mut Criterion) {
     let db = Db::new();
 
     // 预填充一些数据用于 GET 测试
-    let value = b"benchmark_value".to_vec();
+    let value: Bytes = b"benchmark_value".to_vec().into();
     for i in 0..1000 {
-        db.set(&format!("bench:{}", i), value.clone(), None, false, false);
+        db.set(format!("bench:{}", i), value.clone(), None, false, false);
     }
 
     group.bench_function("ping_e2e", |b| {
