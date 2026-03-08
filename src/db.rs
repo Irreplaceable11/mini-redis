@@ -28,7 +28,7 @@ const CLEANUP_BATCH_SIZE: usize = 16;
 
 impl Db {
     pub fn new() -> Db {
-        let shard_count = 64;
+        let shard_count = 256;
         let mut shards = Vec::with_capacity(shard_count);
 
         for _ in 0..shard_count {
@@ -44,11 +44,12 @@ impl Db {
 
     pub fn get(&self, key: &str) -> Option<Bytes> {
         let idx = self.shard_index(key);
-        let instant = Instant::now();
+        let instant: Instant;
         {
             let guard = self.shards[idx].read();
             if let Some(entry) = guard.get(key) {
                 if let Some(ttl) = entry.ttl {
+                    instant = Instant::now();
                     if instant <= ttl {
                         return Some(entry.value.clone());
                     }
@@ -117,6 +118,25 @@ impl Db {
             }
         }
         del_result
+    }
+
+    pub fn exists(&self, keys: Vec<String>) -> usize {
+        let mut exists_result = 0;
+
+        let mut keys_map: HashMap<usize, Vec<String>>  = HashMap::new();
+        for key in keys {
+            let i = self.shard_index(key.as_str());
+            keys_map.entry(i).or_insert_with(Vec::new).push(key);
+        }
+        for (idx, key_vec) in keys_map {
+            let guard = self.shards[idx].read();
+            for k in key_vec {
+                if guard.contains_key(k.as_str()) {
+                    exists_result += 1;
+                }
+            }
+        }
+        exists_result
     }
 
     pub fn clean_up(&self) {

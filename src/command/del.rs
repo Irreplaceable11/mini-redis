@@ -14,7 +14,7 @@ impl Del {
 
     pub fn parse(args: &[Frame]) -> Result<Del> {
         if args.is_empty() {
-            return Err(anyhow!("wrong arg number for commmand 'del'"));
+            return Err(anyhow!("wrong arg number for command 'del'"));
         }
         let keys: Vec<String> = args
             .iter()

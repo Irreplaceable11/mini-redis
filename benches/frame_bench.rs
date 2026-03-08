@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use mini_redis::frame::Frame;
 
 /// Frame 编码性能
@@ -31,7 +31,7 @@ fn bench_encode(c: &mut Criterion) {
     });
 
     group.bench_function("bulk_string_small", |b| {
-        let frame = Frame::BulkString(b"hello world".to_vec());
+        let frame = Frame::BulkString(Bytes::from_static(b"hello world"));
         b.iter(|| {
             let mut buf = BytesMut::with_capacity(64);
             frame.encode(&mut buf);
@@ -39,7 +39,7 @@ fn bench_encode(c: &mut Criterion) {
     });
 
     group.bench_function("bulk_string_1kb", |b| {
-        let frame = Frame::BulkString(vec![b'x'; 1024]);
+        let frame = Frame::BulkString(vec![b'x'; 1024].into());
         b.iter(|| {
             let mut buf = BytesMut::with_capacity(2048);
             frame.encode(&mut buf);
@@ -57,9 +57,9 @@ fn bench_encode(c: &mut Criterion) {
     // 模拟一个典型的 SET 命令数组: *3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nhello\r\n
     group.bench_function("array_set_cmd", |b| {
         let frame = Frame::Array(vec![
-            Frame::BulkString(b"SET".to_vec()),
-            Frame::BulkString(b"mykey".to_vec()),
-            Frame::BulkString(b"hello".to_vec()),
+            Frame::BulkString(Bytes::from_static(b"SET")),
+            Frame::BulkString(Bytes::from_static(b"mykey")),
+            Frame::BulkString(Bytes::from_static(b"hello")),
         ]);
         b.iter(|| {
             let mut buf = BytesMut::with_capacity(128);
@@ -71,12 +71,12 @@ fn bench_encode(c: &mut Criterion) {
     group.bench_function("nested_array", |b| {
         let frame = Frame::Array(vec![
             Frame::Array(vec![
-                Frame::BulkString(b"key1".to_vec()),
-                Frame::BulkString(b"value1".to_vec()),
+                Frame::BulkString(Bytes::from_static(b"key1")),
+                Frame::BulkString(Bytes::from_static(b"value1")),
             ]),
             Frame::Array(vec![
-                Frame::BulkString(b"key2".to_vec()),
-                Frame::BulkString(b"value2".to_vec()),
+                Frame::BulkString(Bytes::from_static(b"key2")),
+                Frame::BulkString(Bytes::from_static(b"value2")),
             ]),
         ]);
         b.iter(|| {
@@ -93,7 +93,7 @@ fn bench_encode_bulk_sizes(c: &mut Criterion) {
     let mut group = c.benchmark_group("frame_encode_bulk_size");
 
     for size in [16, 128, 1024, 8192, 65536] {
-        let frame = Frame::BulkString(vec![b'A'; size]);
+        let frame = Frame::BulkString(vec![b'A'; size].into());
         group.bench_with_input(BenchmarkId::new("encode", size), &size, |b, _| {
             b.iter(|| {
                 let mut buf = BytesMut::with_capacity(size + 32);
@@ -109,9 +109,9 @@ fn bench_encode_bulk_sizes(c: &mut Criterion) {
 fn bench_encode_reuse_buffer(c: &mut Criterion) {
     let mut group = c.benchmark_group("frame_encode_buffer_reuse");
     let frame = Frame::Array(vec![
-        Frame::BulkString(b"SET".to_vec()),
-        Frame::BulkString(b"mykey".to_vec()),
-        Frame::BulkString(vec![b'v'; 256]),
+        Frame::BulkString(Bytes::from_static(b"SET")),
+        Frame::BulkString(Bytes::from_static(b"mykey")),
+        Frame::BulkString(vec![b'v'; 256].into()),
     ]);
 
     group.bench_function("new_buffer_each_time", |b| {

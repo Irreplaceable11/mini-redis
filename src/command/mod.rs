@@ -3,6 +3,7 @@ pub mod set;
 pub mod parse;
 pub mod get;
 pub mod del;
+pub mod exists;
 
 use crate::frame::Frame;
 use anyhow::{Result, anyhow};

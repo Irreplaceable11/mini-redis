@@ -14,6 +14,10 @@ use mini_redis::frame;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // redis-benchmark -h 127.0.0.1 -p 6377 -c 50 -n 100000 -t get,set -P 16
+    // redis基准测试 pipeline模式 get qps:3040000/s set qps:3000000/s
+    // redis-benchmark -h 127.0.0.1 -p 6377 -c 50 -n 100000 -t set,get
+    // 普通模式 get qps:52770/s  set qps: 61387/s
     init_log().await;
     let listener = TcpListener::bind(("127.0.0.1", 6377)).await?;
     info!("mini redis listening on {:?}", listener.local_addr()?);
