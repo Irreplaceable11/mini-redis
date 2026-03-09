@@ -1,23 +1,23 @@
-use std::sync::Arc;
 use anyhow::Result;
+use std::sync::Arc;
 use time::format_description;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{interval, Duration};
+use tokio::time::{Duration, interval};
 
-use tracing::Instrument;
-use tracing::{info, info_span};
-use tracing_subscriber::fmt;
-use time::macros::offset;
 use mini_redis::connection::Connection;
 use mini_redis::db::Db;
 use mini_redis::frame;
+use time::macros::offset;
+use tracing::Instrument;
+use tracing::{info, info_span};
+use tracing_subscriber::fmt;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // redis-benchmark -h 127.0.0.1 -p 6377 -c 50 -n 100000 -t get,set -P 16
-    // redis基准测试 pipeline模式 get qps:3040000/s set qps:3000000/s
+    // redis基准测试 pipeline模式 get qps:719424/s set qps:354609/s
     // redis-benchmark -h 127.0.0.1 -p 6377 -c 50 -n 100000 -t set,get
-    // 普通模式 get qps:52770/s  set qps: 61387/s
+    // 普通模式 get qps:66934/s  set qps: 67069/s
     init_log().await;
     let listener = TcpListener::bind(("127.0.0.1", 6377)).await?;
     info!("mini redis listening on {:?}", listener.local_addr()?);
@@ -38,12 +38,12 @@ async fn main() -> Result<()> {
     });
     loop {
         let (socket, addr) = listener.accept().await?;
-
+        socket.set_nodelay(true)?;
         let span = info_span!("handle_connection", client_addr = %addr);
         let db = db_arc.clone();
         tokio::spawn(
             async move {
-               let _ = handle_connection(socket, db).await;
+                let _ = handle_connection(socket, db).await;
             }
             .instrument(span),
         );
@@ -62,30 +62,44 @@ pub async fn init_log() {
 
 pub async fn handle_connection(socket: TcpStream, db: Arc<Db>) -> Result<()> {
     use mini_redis::command::Command;
-    
+
     let peer_addr = socket.peer_addr()?;
     info!("Client connected: {}", peer_addr);
-    
-    let mut conn = Connection::new(socket);
 
+    let mut conn = Connection::new(socket);
     loop {
-        let frame = match conn.read_frame().await? {
-            Some(frame) => frame,
-            None => break,
-        };
-        let cmd = Command::from_frame(frame);
-        match cmd {
-            Ok(cmd) => {
-                let resp = Command::execute(cmd, &db);
-                conn.write_frame(&resp).await?
-            }
-            Err(err) => {
-                conn.write_frame(&frame::Frame::Error(err.to_string())).await?
+        let mut frames = Vec::new();
+        // 读取第一个frame
+        match conn.read_frame().await? {
+            Some(frame) => frames.push(frame),
+            None => break //说明什么也没读过
+        }
+        // 再读取stream中所有的frame
+        // 对比之前读取一个就处理返回可以提升吞吐量
+        loop {
+            let frame = match conn.try_read_frame()? {
+                Some(frame) => frame,
+                None => break,
+            };
+            frames.push(frame);
+        }
+
+        for ele in frames {
+            let cmd = Command::from_frame(ele);
+            match cmd {
+                Ok(cmd) => {
+                    let resp = Command::execute(cmd, &db);
+                    conn.encode_to_buffer(&resp)?
+                }
+                Err(err) => {
+                    conn.encode_to_buffer(&frame::Frame::Error(err.to_string()))?
+                }
             }
         }
-      
+        conn.write_and_flush().await?;
+       
     }
-    
+
     info!("Client disconnected: {}", peer_addr);
     Ok(())
 }

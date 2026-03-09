@@ -19,11 +19,12 @@ pub(crate) trait CommandExecute {
 
 
 pub enum Command {
-    // TODO 增加 EXISTS TTL PTTL EXPIRE KEYS
+    // TODO 增加 TTL PTTL EXPIRE KEYS
     Ping(ping::Ping),
     Set(set::Set),
     Get(get::Get),
     Del(del::Del),
+    Exist(exists::Exists),
     Unknown(String),
 }
 
@@ -34,6 +35,7 @@ impl Command {
             Command::Set(cmd) => cmd.execute(db),
             Command::Get(cmd) => cmd.execute(db),
             Command::Del(cmd) => cmd.execute(db),
+            Command::Exist(cmd) => cmd.execute(db),
             Command::Unknown(cmd) => Frame::Error(format!("unknown command:{:?}", cmd)),
         }
     }
@@ -55,6 +57,7 @@ impl Command {
             b"SET" => Ok(Command::Set(set::Set::parse(&arg)?)),
             b"GET" => Ok(Command::Get(get::Get::parse(&arg)?)),
             b"DEL" => Ok(Command::Del(del::Del::parse(&arg)?)),
+            b"EXIST" => Ok(Command::Exist(exists::Exists::parse(&arg)?)),
             _ => {
                 let cmd_name_string = String::from_utf8(cmd_name)?;
                 info!("unknown command: {}", cmd_name_string);

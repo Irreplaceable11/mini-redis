@@ -48,6 +48,17 @@ impl Connection {
         Ok(())
     }
 
+    pub fn encode_to_buffer(&mut self, frame: &Frame) -> Result<()> {
+        frame.encode(&mut self.write_buffer);
+        Ok(())
+    }
+
+    pub async fn write_and_flush(&mut self) -> Result<()>  {
+        self.stream.write_all(&self.write_buffer).await?;
+        self.write_buffer.clear();
+        Ok(())
+    }
+
     pub fn find_crlf(buf: &[u8]) -> Option<usize> {
         memmem::find(buf, b"\r\n").map(|pos| pos + 2)
     }
