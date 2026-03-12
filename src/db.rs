@@ -1,11 +1,10 @@
-use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
 use bytes::Bytes;
 use parking_lot::RwLock;
-use tracing::info;
+use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Instant;
 
 pub struct Entry {
     value: Bytes,
@@ -61,20 +60,7 @@ impl Db {
             }
         }
 
-        let mut write_guard = self.shards[idx].write();
-
-        if let Some(entry) = write_guard.get(key) {
-            if let Some(ttl) = entry.ttl {
-                return if instant > ttl {
-                    write_guard.remove(key);
-                    None
-                } else {
-                    Some(entry.value.clone())
-                };
-            }
-        }
-
-        None
+        self.double_check_remove(key, idx)
     }
 
     pub fn set(&self, key: String, value: Bytes, ttl: Option<Instant>, nx: bool, xx: bool) -> Option<()> {
@@ -131,12 +117,42 @@ impl Db {
         for (idx, key_vec) in keys_map {
             let guard = self.shards[idx].read();
             for k in key_vec {
-                if guard.contains_key(k.as_str()) {
+                if guard.get(&k).map_or(false,|v| v.ttl.map_or(true, |t| Instant::now() < t)) {
                     exists_result += 1;
                 }
             }
         }
         exists_result
+    }
+
+    pub fn ttl(&self, key: &str, return_millis: bool ) -> i64 {
+        let idx = self.shard_index(key);
+        let mut need_cleanup = false;
+        {
+            let guard = self.shards[idx].read();
+            if let Some(entry) = guard.get(key) {
+                if let Some(ttl) = entry.ttl {
+                    if Instant::now() < ttl {
+                        //存在未过期
+                        let remaining = ttl.saturating_duration_since(Instant::now());
+                        return if return_millis {
+                            remaining.as_millis() as i64
+                        } else {
+                            remaining.as_secs() as i64
+                        }
+                    }
+                    need_cleanup = true;
+                } else {
+                    //存在并永不过期
+                    return -1
+                }
+            }
+        }
+        if need_cleanup {
+            self.double_check_remove(key, idx);
+        }
+        // 不存在或者过期
+        -2
     }
 
     pub fn clean_up(&self) {
@@ -167,5 +183,21 @@ impl Db {
 
         let hash = hasher.finish();
         hash as usize & (self.shard_count - 1)
+    }
+
+    fn double_check_remove(&self, key: &str, idx: usize) -> Option<Bytes>   {
+        let mut guard = self.shards[idx].write();
+        if let Some(entry) = guard.get(key) {
+            if let Some(ttl) = entry.ttl {
+                if Instant::now() > ttl {
+                    guard.remove(key);
+                    None
+                } else {
+                    Some(entry.value.clone())
+                }
+            } else {
+                Some(entry.value.clone())
+            }
+        } else { None }
     }
 }
