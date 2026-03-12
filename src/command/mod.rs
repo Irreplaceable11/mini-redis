@@ -4,10 +4,10 @@ pub mod parse;
 pub mod get;
 pub mod del;
 pub mod exists;
+pub mod ttl;
 
 use crate::frame::Frame;
-use anyhow::{Result, anyhow};
-use bytes::Bytes;
+use anyhow::{Result};
 use tracing::info;
 // 导出解析辅助函数，供各个命令模块使用
 pub(crate) use parse::{extract_string, extract_u32, extract_i64, extract_usize, extract_bytes};
@@ -19,12 +19,13 @@ pub(crate) trait CommandExecute {
 
 
 pub enum Command {
-    // TODO 增加 TTL PTTL EXPIRE KEYS
+    // TODO 增加 EXPIRE KEYS
     Ping(ping::Ping),
     Set(set::Set),
     Get(get::Get),
     Del(del::Del),
     Exist(exists::Exists),
+    Ttl(ttl::Ttl),
     Unknown(String),
 }
 
@@ -36,6 +37,7 @@ impl Command {
             Command::Get(cmd) => cmd.execute(db),
             Command::Del(cmd) => cmd.execute(db),
             Command::Exist(cmd) => cmd.execute(db),
+            Command::Ttl(cmd) => cmd.execute(db),
             Command::Unknown(cmd) => Frame::Error(format!("unknown command:{:?}", cmd)),
         }
     }
@@ -58,6 +60,7 @@ impl Command {
             b"GET" => Ok(Command::Get(get::Get::parse(&arg)?)),
             b"DEL" => Ok(Command::Del(del::Del::parse(&arg)?)),
             b"EXIST" => Ok(Command::Exist(exists::Exists::parse(&arg)?)),
+            b"TTL" | b"PTTL" => Ok(Command::Ttl(ttl::Ttl::parse(&cmd_name, &arg)?)),
             _ => {
                 let cmd_name_string = String::from_utf8(cmd_name)?;
                 info!("unknown command: {}", cmd_name_string);

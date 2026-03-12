@@ -20,7 +20,7 @@ impl Get {
 
 impl CommandExecute for Get {
     fn execute(self, db: &Db) -> Frame {
-        match db.get(self.key.as_ref()) {
+        match db.get(&self.key) {
             Some(value) => Frame::BulkString(value),
             None => Frame::Null,
         }
