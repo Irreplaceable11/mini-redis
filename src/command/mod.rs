@@ -5,6 +5,8 @@ pub mod get;
 pub mod del;
 pub mod exists;
 pub mod ttl;
+pub mod expire;
+pub mod keys;
 
 use crate::frame::Frame;
 use anyhow::{Result};
@@ -19,13 +21,15 @@ pub(crate) trait CommandExecute {
 
 
 pub enum Command {
-    // TODO 增加 EXPIRE KEYS
+    // TODO 增加 KEYS
     Ping(ping::Ping),
     Set(set::Set),
     Get(get::Get),
     Del(del::Del),
     Exist(exists::Exists),
     Ttl(ttl::Ttl),
+    Expire(expire::Expire),
+    Keys(keys::Keys),
     Unknown(String),
 }
 
@@ -38,6 +42,8 @@ impl Command {
             Command::Del(cmd) => cmd.execute(db),
             Command::Exist(cmd) => cmd.execute(db),
             Command::Ttl(cmd) => cmd.execute(db),
+            Command::Expire(cmd) => cmd.execute(db),
+            Command::Keys(cmd) => cmd.execute(db),
             Command::Unknown(cmd) => Frame::Error(format!("unknown command:{:?}", cmd)),
         }
     }
@@ -61,6 +67,8 @@ impl Command {
             b"DEL" => Ok(Command::Del(del::Del::parse(&arg)?)),
             b"EXIST" => Ok(Command::Exist(exists::Exists::parse(&arg)?)),
             b"TTL" | b"PTTL" => Ok(Command::Ttl(ttl::Ttl::parse(&cmd_name, &arg)?)),
+            b"EXPIRE" | b"PEXPIRE" => Ok(Command::Expire(expire::Expire::parse(&cmd_name, &arg)?)),
+            b"KEYS" => Ok(Command::Keys(keys::Keys::parse(&arg)?)),
             _ => {
                 let cmd_name_string = String::from_utf8(cmd_name)?;
                 info!("unknown command: {}", cmd_name_string);
