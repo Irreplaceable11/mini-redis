@@ -9,10 +9,10 @@ pub mod expire;
 pub mod keys;
 
 use crate::frame::Frame;
-use anyhow::{Result};
+use anyhow::Result;
 use tracing::info;
 // 导出解析辅助函数，供各个命令模块使用
-pub(crate) use parse::{extract_string, extract_u32, extract_i64, extract_usize, extract_bytes};
+pub(crate) use parse::{extract_bytes, extract_i64, extract_string, extract_u32, extract_usize};
 use crate::db::Db;
 
 pub(crate) trait CommandExecute {
