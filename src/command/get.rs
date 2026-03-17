@@ -1,5 +1,5 @@
 use crate::command::{extract_string, CommandExecute};
-use crate::db::Db;
+use crate::context::Context;
 use crate::frame::Frame;
 use anyhow::Result;
 
@@ -19,8 +19,8 @@ impl Get {
 }
 
 impl CommandExecute for Get {
-    fn execute(self, db: &Db) -> Frame {
-        match db.get(&self.key) {
+    fn execute(self, ctx: &Context) -> Frame {
+        match ctx.db().get(&self.key) {
             Some(value) => Frame::BulkString(value),
             None => Frame::Null,
         }

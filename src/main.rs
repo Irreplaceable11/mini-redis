@@ -1,105 +1,64 @@
 use anyhow::Result;
 use std::sync::Arc;
 use time::format_description;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio::time::{Duration, interval};
 
-use mini_redis::connection::Connection;
+use mini_redis::context::Context;
 use mini_redis::db::Db;
-use mini_redis::frame;
+use mini_redis::handler::handle_connection;
+use mini_redis::pubsub::PubSub;
 use time::macros::offset;
 use tracing::Instrument;
 use tracing::{info, info_span};
 use tracing_subscriber::fmt;
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     // redis-benchmark -h 127.0.0.1 -p 6377 -c 50 -n 100000 -t get,set -P 16
-    // redis基准测试 pipeline模式 get qps:719424/s set qps:354609/s
+    // redis基准测试 pipeline模式 get qps:719424/s set qps:354609/s (windows 11 24h2数据)
+    // pipeline模式 get qps:1449275/s set qps:970873/s (wsl2 ubuntu 24.04)
     // redis-benchmark -h 127.0.0.1 -p 6377 -c 50 -n 100000 -t set,get
-    // 普通模式 get qps:66934/s  set qps: 67069/s
+    // 普通模式 get qps:66934/s  set qps: 67069/s(windows 11 24h2数据)
+    // 普通模式 get qps:103305/s  set qps: 100200/s (wsl2 ubuntu 24.04)
     init_log().await;
-    let listener = TcpListener::bind(("127.0.0.1", 6377)).await?;
+    let listener = TcpListener::bind(("0.0.0.0", 6377)).await?;
     info!("mini redis listening on {:?}", listener.local_addr()?);
-    let db_arc = Arc::new(Db::new());
-    let arc1 = db_arc.clone();
-    tokio::spawn(async move {
-        info!("starting db clean up");
-        tokio::time::sleep(Duration::from_secs(5 * 60)).await;
 
-        // 2. 创建周期性定时器：每 30 秒一次
+    let ctx = Arc::new(Context::new(Db::new(), PubSub::new()));
+
+    // 启动定期清理过期 key 的后台任务
+    let cleanup_ctx = ctx.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(5 * 60)).await;
         let mut intv = interval(Duration::from_secs(30));
         loop {
-            intv.tick().await; // 等待下一个 30 秒时间点
-
-            // 执行清理
-            arc1.clean_up();
+            intv.tick().await;
+            cleanup_ctx.db().clean_up();
         }
     });
+
     loop {
         let (socket, addr) = listener.accept().await?;
         socket.set_nodelay(true)?;
         let span = info_span!("handle_connection", client_addr = %addr);
-        let db = db_arc.clone();
+        let conn_ctx = ctx.clone();
         tokio::spawn(
             async move {
-                let _ = handle_connection(socket, db).await;
+                if let Err(e) = handle_connection(socket, conn_ctx).await {
+                    info!("connection error: {}", e);
+                }
             }
             .instrument(span),
         );
     }
 }
 
-pub async fn init_log() {
-    // 自定义时间格式：yyyy-MM-dd HH:mm:ss
+async fn init_log() {
     let timer_format = format_description::parse(
         "[year]-[month padding:zero]-[day padding:zero] [hour]:[minute]:[second]",
     )
     .expect("时间格式字符串无效");
     let timer = fmt::time::OffsetTime::new(offset!(+8), timer_format);
     tracing_subscriber::fmt().with_timer(timer).init();
-}
-
-pub async fn handle_connection(socket: TcpStream, db: Arc<Db>) -> Result<()> {
-    use mini_redis::command::Command;
-
-    let peer_addr = socket.peer_addr()?;
-    info!("Client connected: {}", peer_addr);
-
-    let mut conn = Connection::new(socket);
-    loop {
-        let mut frames = Vec::new();
-        // 读取第一个frame
-        match conn.read_frame().await? {
-            Some(frame) => frames.push(frame),
-            None => break //说明什么也没读过
-        }
-        // 再读取stream中所有的frame
-        // 对比之前读取一个就处理返回可以提升吞吐量
-        loop {
-            let frame = match conn.try_read_frame()? {
-                Some(frame) => frame,
-                None => break,
-            };
-            frames.push(frame);
-        }
-
-        for ele in frames {
-            let cmd = Command::from_frame(ele);
-            match cmd {
-                Ok(cmd) => {
-                    let resp = Command::execute(cmd, &db);
-                    conn.encode_to_buffer(&resp)?
-                }
-                Err(err) => {
-                    conn.encode_to_buffer(&frame::Frame::Error(err.to_string()))?
-                }
-            }
-        }
-        conn.write_and_flush().await?;
-       
-    }
-
-    info!("Client disconnected: {}", peer_addr);
-    Ok(())
 }
