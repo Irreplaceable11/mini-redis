@@ -2,7 +2,7 @@
 use crate::frame::Frame;
 use anyhow::{anyhow, Result};
 use crate::command::{extract_string, CommandExecute};
-use crate::db::Db;
+use crate::context::Context;
 
 pub struct Exists {
 
@@ -29,8 +29,8 @@ impl Exists {
 }
 
 impl CommandExecute for Exists {
-    fn execute(self, db: &Db) -> Frame {
-        let res = db.exists(self.keys);
+    fn execute(self, ctx: &Context) -> Frame {
+        let res = ctx.db().exists(self.keys);
         Frame::Integer(res as i64)
     }
 }

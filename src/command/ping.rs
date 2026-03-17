@@ -1,5 +1,5 @@
 use crate::command::extract_string;
-use crate::db::Db;
+use crate::context::Context;
 use crate::{command::CommandExecute, frame::Frame};
 use anyhow::{anyhow, Result};
 
@@ -37,7 +37,7 @@ impl Ping {
 }
 
 impl CommandExecute for Ping {
-    fn execute(self, _db: &Db) -> Frame {
+    fn execute(self, _ctx: &Context) -> Frame {
          match self.msg {
             None => Frame::SimpleString(PONG.into()),
             Some(msg) => Frame::BulkString(msg.into())

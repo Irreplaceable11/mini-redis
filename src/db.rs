@@ -199,22 +199,29 @@ impl Db {
         }
     }
 
-    pub fn keys(&self, key: &str) -> Vec<Arc<str>> {
-        self.shards
-            .par_iter()
-            .flat_map(|shard| {
-                let key_list: Vec<_> = { 
-                    shard.read().keys().cloned().collect() 
-                };
-                // 先收集key引用在做匹配，减少锁持有时间
+    /// 异步版本：通过 spawn_blocking 将 rayon 并行扫描
+    /// 放到 tokio 的阻塞线程池中执行，避免阻塞 async worker thread
+    pub async fn keys(&self, pattern: &str) -> Vec<Arc<str>> {
+        // spawn_blocking 需要 'static 生命周期的闭包
+        // 而 &self 和 &str 都是借用，所以需要 clone 必要的数据
+        let shards = self.shards.clone();
+        let pattern = pattern.to_string();
 
-                key_list
-                    .iter()
-                    .filter(|k| glob_match(key, k.as_ref()))
-                    .cloned()
-                    .collect::<Vec<_>>()
-            })
-            .collect()
+        tokio::task::spawn_blocking(move || {
+            shards
+                .par_iter()
+                .flat_map(|shard| {
+                    // 先收集 key 引用再做匹配，减少锁持有时间
+                    let key_list: Vec<_> = { shard.read().keys().cloned().collect() };
+                    key_list
+                        .into_iter()
+                        .filter(|k| glob_match(&pattern, k.as_ref()))
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        })
+        .await
+        .unwrap_or_default()
     }
 
     pub fn clean_up(&self) {

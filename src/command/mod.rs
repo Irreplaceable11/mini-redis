@@ -7,21 +7,23 @@ pub mod exists;
 pub mod ttl;
 pub mod expire;
 pub mod keys;
+pub mod publish;
+pub mod subscribe;
+pub mod unsubscribe;
 
 use crate::frame::Frame;
+use crate::context::Context;
 use anyhow::Result;
 use tracing::info;
 // 导出解析辅助函数，供各个命令模块使用
-pub(crate) use parse::{extract_bytes, extract_i64, extract_string, extract_u32, extract_usize};
-use crate::db::Db;
+pub(crate) use parse::{extract_bytes, extract_i64, extract_string};
 
 pub(crate) trait CommandExecute {
-    fn execute(self, db: &Db) -> Frame;
+    fn execute(self, ctx: &Context) -> Frame;
 }
 
 
 pub enum Command {
-    // TODO 增加 KEYS
     Ping(ping::Ping),
     Set(set::Set),
     Get(get::Get),
@@ -30,21 +32,25 @@ pub enum Command {
     Ttl(ttl::Ttl),
     Expire(expire::Expire),
     Keys(keys::Keys),
+    Publish(publish::Publish),
+    Subscribe(subscribe::Subscribe),
+    Unsubscribe(unsubscribe::Unsubscribe),
     Unknown(String),
 }
 
 impl Command {
-    pub fn execute(self, db: &Db) -> Frame {
+    pub fn execute(self, ctx: &Context) -> Frame {
         match self {
-            Command::Ping(cmd) => cmd.execute(db),
-            Command::Set(cmd) => cmd.execute(db),
-            Command::Get(cmd) => cmd.execute(db),
-            Command::Del(cmd) => cmd.execute(db),
-            Command::Exist(cmd) => cmd.execute(db),
-            Command::Ttl(cmd) => cmd.execute(db),
-            Command::Expire(cmd) => cmd.execute(db),
-            Command::Keys(cmd) => cmd.execute(db),
-            Command::Unknown(cmd) => Frame::Error(format!("unknown command:{:?}", cmd)),
+            Command::Ping(cmd) => cmd.execute(ctx),
+            Command::Set(cmd) => cmd.execute(ctx),
+            Command::Get(cmd) => cmd.execute(ctx),
+            Command::Del(cmd) => cmd.execute(ctx),
+            Command::Exist(cmd) => cmd.execute(ctx),
+            Command::Ttl(cmd) => cmd.execute(ctx),
+            Command::Expire(cmd) => cmd.execute(ctx),
+            Command::Publish(cmd)  => cmd.execute(ctx),
+            Command::Unknown(cmd) => Frame::Error(format!("Command failed, unknown command:{:?}", cmd)),
+            _ => Frame::Error("ERR command not implemented".to_string()),
         }
     }
 }
@@ -69,6 +75,9 @@ impl Command {
             b"TTL" | b"PTTL" => Ok(Command::Ttl(ttl::Ttl::parse(&cmd_name, &arg)?)),
             b"EXPIRE" | b"PEXPIRE" => Ok(Command::Expire(expire::Expire::parse(&cmd_name, &arg)?)),
             b"KEYS" => Ok(Command::Keys(keys::Keys::parse(&arg)?)),
+            b"PUBLISH" => Ok(Command::Publish(publish::Publish::parse(&arg)?)),
+            b"SUBSCRIBE" => Ok(Command::Subscribe(subscribe::Subscribe::parse(&arg)?)),
+            b"UNSUBSCRIBE" => Ok(Command::Unsubscribe(unsubscribe::Unsubscribe::parse(&arg)?)),
             _ => {
                 let cmd_name_string = String::from_utf8(cmd_name)?;
                 info!("unknown command: {}", cmd_name_string);

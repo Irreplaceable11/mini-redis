@@ -1,5 +1,5 @@
 use crate::command::{CommandExecute, extract_string};
-use crate::db::Db;
+use crate::context::Context;
 use crate::frame::Frame;
 use anyhow::{Result, anyhow};
 
@@ -26,8 +26,8 @@ impl Del {
 }
 
 impl CommandExecute for Del {
-    fn execute(self, db: &Db) -> Frame {
-        let res = db.del(self.keys);
+    fn execute(self, ctx: &Context) -> Frame {
+        let res = ctx.db().del(self.keys);
         Frame::Integer(res as i64)
     }
 }

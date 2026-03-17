@@ -1,5 +1,5 @@
 use crate::command::{extract_string, CommandExecute};
-use crate::db::Db;
+use crate::context::Context;
 use crate::frame::Frame;
 use anyhow::{anyhow, Result};
 
@@ -34,8 +34,8 @@ impl Ttl {
 
 
 impl CommandExecute for Ttl {
-    fn execute(self, db: &Db) -> Frame {
-        let remaining = db.ttl(&self.key, self.ttl_type == TtlType::Milliseconds);
+    fn execute(self, ctx: &Context) -> Frame {
+        let remaining = ctx.db().ttl(&self.key, self.ttl_type == TtlType::Milliseconds);
         Frame::Integer(remaining)
     }
 }

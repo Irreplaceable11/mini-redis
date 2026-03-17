@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 #异步运行
 tokio = { version = "1.49.0", features = ["full"] }
+tokio-stream = {version = "0.1.18", features = ["sync"]}
 rayon = "1.11.0"
 #错误处理
 anyhow = "1.0.102"
@@ -29,14 +30,14 @@ dashmap = "6.1.0"
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 
-[[bench]]
-name = "db_bench"
-harness = false
+#[[bench]]
+#name = "db_bench"
+#harness = false
 
-[[bench]]
-name = "frame_bench"
-harness = false
+#[[bench]]
+#name = "frame_bench"
+#harness = false
 
-[[bench]]
-name = "command_bench"
-harness = false
+#[[bench]]
+#name = "command_bench"
+#harness = false

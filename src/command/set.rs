@@ -7,7 +7,7 @@ use anyhow::{anyhow, Result};
 use bytes::Bytes;
 
 use crate::command::{extract_bytes, extract_string, CommandExecute};
-use crate::db::Db;
+use crate::context::Context;
 
 pub struct Set {
     pub key: String,
@@ -121,9 +121,9 @@ impl Set {
 }
 
 impl CommandExecute for Set {
-    fn execute(self, db: &Db) -> Frame {
+    fn execute(self, ctx: &Context) -> Frame {
         let instant = self.expires_at_direct();
-        match db.set(&self.key, self.value, instant, self.nx, self.xx) {
+        match ctx.db().set(&self.key, self.value, instant, self.nx, self.xx) {
             Some(_) => Frame::SimpleString("OK".to_string()),
             None => Frame::Null
         }

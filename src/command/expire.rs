@@ -2,7 +2,7 @@ use crate::frame::Frame;
 use std::time::{Duration, Instant};
 
 use crate::command::{extract_i64, extract_string, CommandExecute};
-use crate::db::Db;
+use crate::context::Context;
 use anyhow::{anyhow, Result};
 
 pub struct Expire {
@@ -41,12 +41,12 @@ impl Expire {
     pub fn expires_at_direct(&self) -> Option<Instant> {
         match &self.expire_at {
             ExpireType::Seconds(secs) => {
-                if secs > &0 {
+                if *secs > 0 {
                     return Some(Instant::now() + Duration::from_secs(*secs as u64))
                 }
             }
             ExpireType::Milliseconds(ms) => {
-                if ms > &0 {
+                if *ms > 0 {
                     return Some(Instant::now() + Duration::from_millis(*ms as u64))
                 }
 
@@ -58,9 +58,9 @@ impl Expire {
 
 impl CommandExecute for Expire {
 
-    fn execute(self, db: &Db) -> Frame {
+    fn execute(self, ctx: &Context) -> Frame {
         let expire_at = self.expires_at_direct();
-        let result = db.expire(&self.key, expire_at);
+        let result = ctx.db().expire(&self.key, expire_at);
         Frame::Integer(result as i64)
     }
 }
