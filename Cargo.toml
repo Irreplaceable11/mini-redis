@@ -5,9 +5,7 @@ edition = "2024"
 
 [dependencies]
 #异步运行
-tokio = { version = "1.49.0", features = ["full"] }
-tokio-stream = {version = "0.1.18", features = ["sync"]}
-rayon = "1.11.0"
+monoio = "0.2.4"
 #错误处理
 anyhow = "1.0.102"
 
@@ -21,23 +19,10 @@ bytes = "1"
 memchr = "2"
 # 数字转字节
 itoa = "1.0"
-parking_lot = "0.12.5"
+
 #redis glob风格匹配
 fast-glob = "1.0.1"
-# 线程安全的map, 类似java的ConcurrentHashMap 采用分段锁
-dashmap = "6.1.0"
+
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
-
-#[[bench]]
-#name = "db_bench"
-#harness = false
-
-#[[bench]]
-#name = "frame_bench"
-#harness = false
-
-#[[bench]]
-#name = "command_bench"
-#harness = false
