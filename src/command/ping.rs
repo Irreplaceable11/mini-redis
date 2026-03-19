@@ -37,7 +37,7 @@ impl Ping {
 }
 
 impl CommandExecute for Ping {
-    fn execute(self, _ctx: &mut Context) -> Frame {
+    fn execute(self, _ctx: &Context) -> Frame {
          match self.msg {
             None => Frame::SimpleString(PONG.into()),
             Some(msg) => Frame::BulkString(msg.into())

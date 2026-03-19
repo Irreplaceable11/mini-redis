@@ -28,15 +28,21 @@ impl Connection {
             match self.try_read_frame()? {
                 Some(frame) => return Ok(Some(frame)),
                 None => {
-                    let (res, buf) = self.stream.read(self.buffer.take().expect("")).await;
-                    self.buffer = Some(buf);
-                    if res? == 0 {
-                        return if self.buffer.as_ref().unwrap().is_empty() {
+                    // 分配一个独立的临时 buffer 来读取新数据，
+                    // 读完后追加到 self.buffer 中，避免 monoio read 覆盖已有数据
+                    let tmp = vec![0u8; 4096];
+                    let (res, tmp) = self.stream.read(tmp).await;
+                    let n = res?;
+                    if n == 0 {
+                        let buf_empty = self.buffer.as_ref().unwrap().is_empty();
+                        return if buf_empty {
                             Ok(None)
                         } else {
                             Err(anyhow::anyhow!("Connection closed with incomplete frame"))
                         };
                     }
+                    // 把读到的数据追加到 buffer 末尾
+                    self.buffer.as_mut().unwrap().extend_from_slice(&tmp[..n]);
                 }
             }
         }
@@ -49,8 +55,9 @@ impl Connection {
     }
 
     pub async fn write_and_flush(&mut self) -> Result<()>  {
-        let (_i, buffer) = self.stream.write_all(self.write_buffer.take().unwrap()).await;
+        let (res, buffer) = self.stream.write_all(self.write_buffer.take().unwrap()).await;
         self.write_buffer = Some(buffer);
+        res?; // 检查写入错误
         if let Some(buffer) = self.write_buffer.as_mut() {
             buffer.clear();
         }

@@ -26,7 +26,7 @@ impl Del {
 }
 
 impl CommandExecute for Del {
-    fn execute(self, ctx: &mut Context) -> Frame {
+    fn execute(self, ctx: &Context) -> Frame {
         let res = ctx.db().del(self.keys);
         Frame::Integer(res as i64)
     }

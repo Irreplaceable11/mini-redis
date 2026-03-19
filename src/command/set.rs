@@ -121,7 +121,7 @@ impl Set {
 }
 
 impl CommandExecute for Set {
-    fn execute(self, ctx: &mut Context) -> Frame {
+    fn execute(self, ctx: &Context) -> Frame {
         let instant = self.expires_at_direct();
         match ctx.db().set(&self.key, self.value, instant, self.nx, self.xx) {
             Some(_) => Frame::SimpleString("OK".to_string()),

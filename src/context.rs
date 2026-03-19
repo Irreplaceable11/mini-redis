@@ -1,21 +1,16 @@
-use crate::db::Db;
-// use crate::pubsub::PubSub;
+use std::sync::Arc;
+use crate::db::ShardedDb;
 
 pub struct Context {
-    db: Db,
-    // pub_sub: PubSub
+    db: Arc<ShardedDb>,
 }
 
 impl Context {
-    pub fn new(db: Db) -> Self {
-        Context {db }
+    pub fn new(db: Arc<ShardedDb>) -> Self {
+        Context { db }
     }
-    
-    pub fn db(&mut self) -> &mut Db {
-        &mut self.db
+
+    pub fn db(&self) -> &ShardedDb {
+        &self.db
     }
-    
-    // pub fn pub_sub(&self) -> &PubSub {
-    //     &self.pub_sub
-    // }
 }

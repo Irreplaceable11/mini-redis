@@ -34,7 +34,7 @@ impl Ttl {
 
 
 impl CommandExecute for Ttl {
-    fn execute(self, ctx: &mut Context) -> Frame {
+    fn execute(self, ctx: &Context) -> Frame {
         let remaining = ctx.db().ttl(&self.key, self.ttl_type == TtlType::Milliseconds);
         Frame::Integer(remaining)
     }

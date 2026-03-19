@@ -18,6 +18,10 @@ crossbeam-channel = "0.5.15"
 libc = "0.2.183"
 # key路由hash
 ahash = "0.8"
+# 高性能读写锁
+parking_lot = "0.12"
+# lock-free 并发 HashMap
+scc = "2"
 
 #日志
 tracing = "0.1"

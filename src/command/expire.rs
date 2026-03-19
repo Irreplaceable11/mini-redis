@@ -58,7 +58,7 @@ impl Expire {
 
 impl CommandExecute for Expire {
 
-    fn execute(self, ctx: &mut Context) -> Frame {
+    fn execute(self, ctx: &Context) -> Frame {
         let expire_at = self.expires_at_direct();
         let result = ctx.db().expire(&self.key, expire_at);
         Frame::Integer(result as i64)

@@ -1,197 +1,186 @@
 use bytes::Bytes;
 use fast_glob::glob_match;
-use std::collections::{hash_map, HashMap};
+use std::sync::Arc;
 use std::time::Instant;
 
-pub struct Entry {
+use scc::HashMap as SccHashMap;
+
+struct Entry {
     value: Bytes,
     ttl: Option<Instant>,
 }
 
 impl Entry {
-    pub fn new(value: Bytes, ttl: Option<Instant>) -> Entry {
+    fn new(value: Bytes, ttl: Option<Instant>) -> Entry {
         Entry { value, ttl }
     }
+
+    fn is_expired(&self) -> bool {
+        self.ttl.map_or(false, |t| Instant::now() > t)
+    }
 }
 
-pub struct Db {
-    data: HashMap<String, Entry>
+/// 基于 scc::HashMap 的无锁并发数据库
+/// 读操作完全 lock-free（基于 epoch-based reclamation）
+/// 写操作使用细粒度锁，不会阻塞读
+pub struct ShardedDb {
+    data: SccHashMap<String, Entry>,
 }
 
-
-impl Db {
-    pub fn new() -> Db {
-        Db {
-            data: HashMap::new(),
-        }
+impl ShardedDb {
+    pub fn new() -> Arc<Self> {
+        Arc::new(ShardedDb {
+            data: SccHashMap::new(),
+        })
     }
 
-    pub fn get(&mut self, key: &str) -> Option<Bytes> {
-        let instant: Instant;
-        {
-            if let Some(entry) = self.data.get(key) {
-                if let Some(ttl) = entry.ttl {
-                    instant = Instant::now();
-                    if instant <= ttl {
-                        return Some(entry.value.clone());
-                    }
-                } else {
-                    return Some(entry.value.clone());
-                }
+    pub fn get(&self, key: &str) -> Option<Bytes> {
+        // read 是 lock-free 的，不会阻塞其他操作
+        let result = self.data.read(key, |_, entry| {
+            if entry.is_expired() {
+                None
             } else {
-                return None;
+                Some(entry.value.clone())
             }
-        }
+        });
 
-        self.remove_if_expired(key)
+        match result {
+            Some(Some(value)) => Some(value),
+            Some(None) => {
+                // 过期了，清理
+                let _ = self.data.remove(key);
+                None
+            }
+            None => None, // key 不存在
+        }
     }
 
     pub fn set(
-        &mut self,
+        &self,
         key: &str,
         value: Bytes,
         ttl: Option<Instant>,
         nx: bool,
         xx: bool,
     ) -> Option<()> {
-
-        let existing_entry = self.data.get(key);
-
-        let is_expired =
-            existing_entry.map_or(true, |e| e.ttl.map_or(false, |t| Instant::now() > t));
-
-        let exists = existing_entry.is_some() && !is_expired;
-        if nx && exists {
-            return None;
-        }
-        if xx && !exists {
-            return None;
-        }
-        let entry_new = Entry::new(value, ttl);
-        self.data.insert(key.to_string(), entry_new);
-        Some(())
-    }
-
-    pub fn del(&mut self, keys: Vec<String>) -> usize {
-        let mut del_result = 0;
-
-        for k in keys {
-            if self.data.remove(k.as_str()).is_some() {
-                del_result += 1
+        if nx {
+            // NX: 只在 key 不存在时设置
+            // 先检查是否存在且未过期
+            let exists = self.data.read(key, |_, entry| !entry.is_expired()).unwrap_or(false);
+            if exists {
+                return None;
             }
-        }
-        del_result
-    }
-
-    pub fn exists(&mut self, keys: Vec<String>) -> usize {
-        let mut exists_result = 0;
-
-        for k in keys {
-            if self.data.get(k.as_str()).map_or(false, |v| v.ttl.map_or(true, |t| Instant::now() < t)) {
-            exists_result += 1
+            // 尝试插入，如果被其他线程抢先插入了就失败
+            let entry = Entry::new(value, ttl);
+            match self.data.insert(key.to_string(), entry) {
+                Ok(()) => Some(()),
+                Err(_) => None, // 已存在
             }
-        }
-
-        exists_result
-    }
-
-    pub fn ttl(&mut self, key: &str, return_millis: bool) -> i64 {
-        let mut need_cleanup = false;
-        {
-            if let Some(entry) = self.data.get(key) {
-                if let Some(ttl) = entry.ttl {
-                    if Instant::now() < ttl {
-                        //存在未过期
-                        let remaining = ttl.saturating_duration_since(Instant::now());
-                        return if return_millis {
-                            remaining.as_millis() as i64
-                        } else {
-                            remaining.as_secs() as i64
-                        };
-                    }
-                    need_cleanup = true;
-                } else {
-                    //存在并永不过期
-                    return -1;
+        } else if xx {
+            // XX: 只在 key 存在时设置
+            let updated = self.data.update(key, |_, entry| {
+                if entry.is_expired() {
+                    return false;
                 }
-            }
-        }
-        if need_cleanup {
-            self.remove_if_expired(key);
-        }
-        // 不存在或者过期
-        -2
-    }
-
-    /// 设置或移除 key 的过期时间
-    /// 
-    /// - expire_at: None -> 删除 key (类似 DEL)
-    /// - expire_at: Some(instant) -> 设置新的过期时间 (类似 EXPIREAT)
-    /// 
-    /// 返回值:
-    /// - 1: 操作成功 (key 存在并被更新/删除)
-    /// - 0: 操作失败 (key 不存在或已过期)
-    pub fn expire(&mut self, key: &str, expire_at: Option<Instant>) -> u8 {
-
-        match expire_at {
-            // 如果没有过期时间，代表可能是想删除（或者你可以根据需求改为持久化）
-            None => {
-                if self.data.remove(key).is_some() {
-                    1
-                } else {
-                    0
-                }
-            }
-            Some(new_ttl) => {
-                match self.data.entry(key.to_string()) {
-                    hash_map::Entry::Vacant(_) => 0,
-                    hash_map::Entry::Occupied(mut entry) => {
-                        let value = entry.get_mut();
-                        if let Some(old_ttl) = value.ttl {
-                            if Instant::now() > old_ttl {
-                                entry.remove();
-                                return 0; // 已经过期了，视作不存在
-                            }
-                        }
-
-                        // 原地修改 TTL，不需要 clone value
-                        value.ttl = Some(new_ttl);
-                        1
-                    }
-                }
-            }
-        }
-    }
-
-
-    pub fn keys(&self, pattern: &str) -> Vec<String> {
-        self.data.keys()
-            .filter(|k| glob_match(pattern, k))
-            .cloned()
-            .collect()
-    }
-
-    pub fn clean_up(&mut self) {
-        let instant = Instant::now();
-
-        self.data.retain(|_, v| v.ttl.map_or(true, |t| instant < t));
-    }
-
-
-    fn remove_if_expired(&mut self, key: &str) -> Option<Bytes> {
-        if let Some(entry) = self.data.get(key) {
-            if let Some(ttl) = entry.ttl {
-                if Instant::now() > ttl {
-                    self.data.remove(key);
-                    None
-                } else {
-                    Some(entry.value.clone())
-                }
+                true
+            });
+            if updated.is_some_and(|existed| existed) {
+                // key 存在且未过期，覆盖写入
+                let _ = self.data.insert(key.to_string(), Entry::new(value, ttl));
+                Some(())
             } else {
-                Some(entry.value.clone())
+                None
             }
         } else {
-            None
+            // 普通 SET：直接 upsert
+            let entry = Entry::new(value, ttl);
+            let _ = self.data.insert(key.to_string(), entry);
+            Some(())
         }
+    }
+
+    pub fn del(&self, keys: Vec<String>) -> usize {
+        let mut count = 0;
+        for k in &keys {
+            if self.data.remove(k).is_some() {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    pub fn exists(&self, keys: Vec<String>) -> usize {
+        let mut count = 0;
+        for k in &keys {
+            let exists = self.data.read(k, |_, entry| !entry.is_expired()).unwrap_or(false);
+            if exists {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    pub fn ttl(&self, key: &str, return_millis: bool) -> i64 {
+        let result = self.data.read(key, |_, entry| {
+            if let Some(ttl) = entry.ttl {
+                if Instant::now() < ttl {
+                    let remaining = ttl.saturating_duration_since(Instant::now());
+                    if return_millis {
+                        remaining.as_millis() as i64
+                    } else {
+                        remaining.as_secs() as i64
+                    }
+                } else {
+                    -3 // 标记为过期，需要清理
+                }
+            } else {
+                -1 // 存在且永不过期
+            }
+        });
+
+        match result {
+            Some(-3) => {
+                let _ = self.data.remove(key);
+                -2
+            }
+            Some(v) => v,
+            None => -2, // 不存在
+        }
+    }
+
+    pub fn expire(&self, key: &str, expire_at: Option<Instant>) -> u8 {
+        match expire_at {
+            None => {
+                if self.data.remove(key).is_some() { 1 } else { 0 }
+            }
+            Some(new_ttl) => {
+                let updated = self.data.update(key, |_, entry| {
+                    if entry.is_expired() {
+                        return false; // 过期了，视为不存在
+                    }
+                    entry.ttl = Some(new_ttl);
+                    true
+                });
+                match updated {
+                    Some(true) => 1,
+                    Some(false) => {
+                        // 过期了，清理
+                        let _ = self.data.remove(key);
+                        0
+                    }
+                    None => 0, // 不存在
+                }
+            }
+        }
+    }
+
+    pub fn keys(&self, pattern: &str) -> Vec<String> {
+        let mut result = Vec::new();
+        self.data.scan(|k, entry| {
+            if !entry.is_expired() && glob_match(pattern, k) {
+                result.push(k.clone());
+            }
+        });
+        result
     }
 }

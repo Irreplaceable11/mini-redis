@@ -19,7 +19,7 @@ use tracing::info;
 pub(crate) use parse::{extract_bytes, extract_i64, extract_string};
 
 pub(crate) trait CommandExecute {
-    fn execute(self, ctx:&mut Context) -> Frame;
+    fn execute(self, ctx: &Context) -> Frame;
 }
 
 
@@ -57,7 +57,7 @@ impl Command {
         }
     }
 
-    pub fn execute(self, ctx:&mut  Context) -> Frame {
+    pub fn execute(self, ctx: &Context) -> Frame {
         match self {
             Command::Ping(cmd) => cmd.execute(ctx),
             Command::Set(cmd) => cmd.execute(ctx),
@@ -67,7 +67,13 @@ impl Command {
             Command::Ttl(cmd) => cmd.execute(ctx),
             Command::Expire(cmd) => cmd.execute(ctx),
             // Command::Publish(cmd)  => cmd.execute(ctx),
-            Command::Unknown(cmd) => Frame::Error(format!("Command failed, unknown command:{:?}", cmd)),
+            Command::Unknown(cmd) => {
+                // CONFIG、HELLO、COMMAND 等命令返回空数组，让 redis-benchmark 等工具能正常工作
+                match cmd.as_str() {
+                    "CONFIG" | "HELLO" | "COMMAND" => Frame::Array(vec![]),
+                    _ => Frame::Error(format!("ERR unknown command '{}'", cmd)),
+                }
+            }
             _ => Frame::Error("ERR command not implemented".to_string()),
         }
     }
@@ -96,6 +102,10 @@ impl Command {
             // b"PUBLISH" => Ok(Command::Publish(publish::Publish::parse(&arg)?)),
             b"SUBSCRIBE" => Ok(Command::Subscribe(subscribe::Subscribe::parse(&arg)?)),
             b"UNSUBSCRIBE" => Ok(Command::Unsubscribe(unsubscribe::Unsubscribe::parse(&arg)?)),
+            // redis-benchmark 7.x 会发 CONFIG 和 HELLO 命令，返回空数组让它继续
+            b"CONFIG" => Ok(Command::Unknown("CONFIG".to_string())),
+            b"HELLO" => Ok(Command::Unknown("HELLO".to_string())),
+            b"COMMAND" => Ok(Command::Unknown("COMMAND".to_string())),
             _ => {
                 let cmd_name_string = String::from_utf8(cmd_name)?;
                 info!("unknown command: {}", cmd_name_string);
