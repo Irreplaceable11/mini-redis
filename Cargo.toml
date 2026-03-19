@@ -5,12 +5,19 @@ edition = "2024"
 
 [dependencies]
 #异步运行
-monoio = "0.2.4"
+monoio = { version = "0.2.4", features = ["default"]}
 #使用linux socket套接字
 
 socket2 = { version = "0.6.3" , features = ["all"]}
+#cpu亲和性处理
+core_affinity = "0.8.3"
 #错误处理
 anyhow = "1.0.102"
+#跨核心通信
+crossbeam-channel = "0.5.15"
+libc = "0.2.183"
+# key路由hash
+ahash = "0.8"
 
 #日志
 tracing = "0.1"

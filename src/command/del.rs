@@ -4,7 +4,7 @@ use crate::frame::Frame;
 use anyhow::{Result, anyhow};
 
 pub struct Del {
-    keys: Vec<String>,
+    pub keys: Vec<String>,
 }
 
 impl Del {

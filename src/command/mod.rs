@@ -39,6 +39,24 @@ pub enum Command {
 }
 
 impl Command {
+    /// 提取命令中的第一个 key（用于路由到目标核心）
+    /// 无 key 的命令（如 PING）返回 None
+    /// 多 key 命令（如 DEL、EXISTS）返回第一个 key（简化处理）
+    pub fn extract_key(&self) -> Option<String> {
+        match self {
+            Command::Get(cmd) => Some(cmd.key.clone()),
+            Command::Set(cmd) => Some(cmd.key.clone()),
+            Command::Del(cmd) => cmd.keys.first().map(|k| k.clone()),
+            Command::Exist(cmd) => cmd.keys.first().map(|k| k.clone()),
+            Command::Ttl(cmd) => Some(cmd.key.clone()),
+            Command::Expire(cmd) => Some(cmd.key.clone()),
+            Command::Keys(_) => None,  // KEYS 是全局扫描，本地执行
+            Command::Ping(_) => None,
+            Command::Subscribe(_) | Command::Unsubscribe(_) => None,
+            Command::Unknown(_) => None,
+        }
+    }
+
     pub fn execute(self, ctx:&mut  Context) -> Frame {
         match self {
             Command::Ping(cmd) => cmd.execute(ctx),

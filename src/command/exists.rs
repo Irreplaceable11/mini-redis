@@ -6,7 +6,7 @@ use crate::context::Context;
 
 pub struct Exists {
 
-    keys: Vec<String>
+    pub keys: Vec<String>
 }
 
 impl Exists {

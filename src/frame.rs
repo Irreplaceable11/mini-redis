@@ -1,6 +1,6 @@
 use bytes::{BufMut, Bytes, BytesMut};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Frame {
     // 简单字符串
     SimpleString(String),

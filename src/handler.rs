@@ -1,19 +1,24 @@
-use anyhow::{anyhow, Result};
-use bytes::Bytes;
-use std::sync::Arc;
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use anyhow::Result;
 use monoio::net::TcpStream;
-use tracing::{error, info};
+use tracing::info;
 
 use crate::command::Command;
 use crate::connection::Connection;
 use crate::context::Context;
-use crate::frame;
+use crate::dispatcher::CoreBus;
 use crate::frame::Frame;
 
 /// 处理一个客户端连接的完整生命周期
-pub async fn handle_connection(socket: TcpStream, mut context: Context) -> Result<()> {
+pub async fn handle_connection(
+    socket: TcpStream,
+    context: Rc<RefCell<Context>>,
+    bus: Rc<CoreBus>,
+) -> Result<()> {
     let peer_addr = socket.peer_addr()?;
-    info!("Client connected: {}", peer_addr);
+    info!("Client connected: {} on core {}", peer_addr, bus.my_core_id);
 
     let mut conn = Connection::new(socket);
     loop {
@@ -22,32 +27,18 @@ pub async fn handle_connection(socket: TcpStream, mut context: Context) -> Resul
             Some(frame) => frames.push(frame),
             None => break,
         }
-        // 批量读取缓冲区中已有的 frame，提升吞吐量
+        // 批量读取缓冲区中已有的 frame
         while let Some(frame) = conn.try_read_frame()? {
             frames.push(frame);
         }
 
-        for ele in frames {
-            match Command::from_frame(ele) {
-                Ok(cmd) => {
-                    // if let Command::Subscribe(sub) = &cmd {
-                    //     handle_subscribe(context.clone(), &mut conn, sub.channels().clone())
-                    //         .await?;
-                    //     return Ok(());
-                    // }
-                    // Keys 命令需要 async 执行（内部用了 spawn_blocking）
-                    if let Command::Keys(keys) = cmd {
-                        let resp = keys.execute(&mut context);
-                        conn.encode_to_buffer(&resp)?;
-                        continue;
-                    }
-                    let resp = Command::execute(cmd, &mut context);
-                    conn.encode_to_buffer(&resp)?;
-                }
-                Err(err) => {
-                    conn.encode_to_buffer(&frame::Frame::Error(err.to_string()))?;
-                }
-            }
+        for frame in frames {
+            let response = execute_with_routing(
+                frame,
+                &context,
+                &bus,
+            );
+            conn.encode_to_buffer(&response)?;
         }
         conn.write_and_flush().await?;
     }
@@ -56,119 +47,54 @@ pub async fn handle_connection(socket: TcpStream, mut context: Context) -> Resul
     Ok(())
 }
 
-// 处理订阅模式：持续监听消息推送和客户端命令
-// async fn handle_subscribe(
-//     ctx: Arc<Context>,
-//     conn: &mut Connection,
-//     channels: Vec<String>,
-// ) -> Result<()> {
-//     let mut streams = StreamMap::new();
-//     for channel in channels {
-//         subscribe_channel(&ctx, conn, &mut streams, &channel).await?;
-//     }
-//
-//     loop {
-//         tokio::select! {
-//             Some((channel_name, result)) = streams.next() => {
-//                 match result {
-//                     Ok(msg) => {
-//                         let response = Frame::Array(vec![
-//                             Frame::BulkString(Bytes::from_static(b"message")),
-//                             Frame::BulkString(Bytes::from(channel_name)),
-//                             Frame::BulkString(msg),
-//                         ]);
-//                         conn.encode_to_buffer(&response)?;
-//                         conn.write_and_flush().await?;
-//                     }
-//                     Err(_) => {
-//                         // Lagged 错误：消费太慢，丢失了部分消息
-//                     }
-//                 }
-//             }
-//             frame = conn.read_frame() => {
-//                 match frame {
-//                     Ok(Some(frame)) => {
-//                         handle_subscribe_command(frame, &ctx, conn, &mut streams).await?;
-//                         if streams.is_empty() {
-//                             break;
-//                         }
-//                     }
-//                     Ok(None) => break,
-//                     Err(err) => {
-//                         error!("connection error in subscribe mode: {}", err);
-//                         break;
-//                     }
-//                 }
-//             }
-//         }
-//     }
-//     Ok(())
-// }
-//
-// /// 处理订阅模式下收到的客户端命令
-// async fn handle_subscribe_command(
-//     frame: Frame,
-//     ctx: &Arc<Context>,
-//     conn: &mut Connection,
-//     streams: &mut StreamMap<String, BroadcastStream<Bytes>>,
-// ) -> Result<()> {
-//     let command = Command::from_frame(frame)?;
-//     match &command {
-//         Command::Subscribe(cmd) => {
-//             for channel in cmd.channels() {
-//                 subscribe_channel(ctx, conn, streams, channel).await?;
-//             }
-//         }
-//         Command::Unsubscribe(cmd) => {
-//             for channel in cmd.channels() {
-//                 streams.remove(channel);
-//                 send_ack(conn, channel, ctx, false).await?;
-//             }
-//         }
-//         Command::Ping(_) => {
-//             let resp = Command::execute(command, ctx);
-//             conn.encode_to_buffer(&resp)?;
-//             conn.write_and_flush().await?;
-//         }
-//         _ => {
-//             return Err(anyhow!(
-//                 "ERR only SUBSCRIBE, UNSUBSCRIBE and PING are allowed in subscribe mode"
-//             ));
-//         }
-//     }
-//     Ok(())
-// }
-//
-// /// 订阅单个频道并发送确认
-// async fn subscribe_channel(
-//     ctx: &Arc<Context>,
-//     conn: &mut Connection,
-//     streams: &mut StreamMap<String, BroadcastStream<Bytes>>,
-//     channel: &str,
-// ) -> Result<()> {
-//     let rx = ctx.pub_sub().subscribe(channel);
-//     streams.insert(channel.to_string(), BroadcastStream::new(rx));
-//     send_ack(conn, channel, ctx, true).await
-// }
-//
-// /// 发送订阅/取消订阅的确认帧
-// async fn send_ack(
-//     conn: &mut Connection,
-//     channel: &str,
-//     ctx: &Arc<Context>,
-//     is_subscribe: bool,
-// ) -> Result<()> {
-//     let action = if is_subscribe {
-//         Bytes::from_static(b"subscribe")
-//     } else {
-//         Bytes::from_static(b"unsubscribe")
-//     };
-//     let response = Frame::Array(vec![
-//         Frame::BulkString(action),
-//         Frame::BulkString(Bytes::from(channel.to_string())),
-//         Frame::Integer(ctx.pub_sub().get_channel_count(channel) as i64),
-//     ]);
-//     conn.encode_to_buffer(&response)?;
-//     conn.write_and_flush().await?;
-//     Ok(())
-// }
+/// 带路由的命令执行：
+/// 1. 解析命令，提取 key
+/// 2. 根据 key hash 判断目标核心
+/// 3. 本地 key -> 直接执行
+/// 4. 远程 key -> 转发到目标核心，同步等待结果
+fn execute_with_routing(
+    frame: Frame,
+    ctx: &Rc<RefCell<Context>>,
+    bus: &Rc<CoreBus>,
+) -> Frame {
+    // 先解析命令
+    let cmd = match Command::from_frame(frame.clone()) {
+        Ok(cmd) => cmd,
+        Err(e) => return Frame::Error(e.to_string()),
+    };
+
+    // 提取命令的 key（如果有的话）
+    let key = cmd.extract_key();
+
+    match key {
+        Some(ref k) => {
+            let target_core = bus.route_key(k);
+            if target_core == bus.my_core_id {
+                // 本地执行
+                execute_local(cmd, &mut ctx.borrow_mut())
+            } else {
+                // 远程转发：发送原始 frame 到目标核心，阻塞等待结果
+                let resp = bus.send_remote(target_core, frame);
+                // 这里用 crossbeam 的 recv() 阻塞等待
+                // 因为目标核心处理完会 notify 我们，但我们当前在同步上下文中
+                // 对于 mini-redis 学习项目，这个阻塞时间极短（微秒级）
+                match resp.reply_rx.recv() {
+                    Ok(result) => result,
+                    Err(_) => Frame::Error("ERR remote execution failed".to_string()),
+                }
+            }
+        }
+        None => {
+            // 无 key 的命令（如 PING），本地执行
+            execute_local(cmd, &mut ctx.borrow_mut())
+        }
+    }
+}
+
+fn execute_local(cmd: Command, ctx: &mut Context) -> Frame {
+    if let Command::Keys(keys) = cmd {
+        keys.execute(ctx)
+    } else {
+        Command::execute(cmd, ctx)
+    }
+}
