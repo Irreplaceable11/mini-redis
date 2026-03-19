@@ -3,13 +3,13 @@ use anyhow::Result;
 use bytes::{Buf, BytesMut};
 use memchr::memmem;
 use std::io::{Cursor};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use monoio::io::{AsyncReadRent, AsyncWriteRentExt};
+use monoio::net::TcpStream;
 
 pub struct Connection {
     stream: TcpStream,
-    buffer: BytesMut,
-    write_buffer: BytesMut,
+    buffer: Option<BytesMut>,
+    write_buffer: Option<BytesMut>,
 }
 
 const MAX_BULK_LENGTH: usize = 512 * 1024 * 1024;
@@ -18,8 +18,8 @@ impl Connection {
     pub fn new(stream: TcpStream) -> Self {
         Connection {
             stream,
-            buffer: BytesMut::with_capacity(4096),
-            write_buffer: BytesMut::with_capacity(4096),
+            buffer: Some(BytesMut::with_capacity(4096)),
+            write_buffer: Some(BytesMut::with_capacity(4096)),
         }
     }
 
@@ -28,9 +28,10 @@ impl Connection {
             match self.try_read_frame()? {
                 Some(frame) => return Ok(Some(frame)),
                 None => {
-                    let n = self.stream.read_buf(&mut self.buffer).await?;
-                    if n == 0 {
-                        return if self.buffer.is_empty() {
+                    let (res, buf) = self.stream.read(self.buffer.take().expect("")).await;
+                    self.buffer = Some(buf);
+                    if res? == 0 {
+                        return if self.buffer.as_ref().unwrap().is_empty() {
                             Ok(None)
                         } else {
                             Err(anyhow::anyhow!("Connection closed with incomplete frame"))
@@ -41,21 +42,18 @@ impl Connection {
         }
     }
 
-    pub async fn write_frame(&mut self, frame: &Frame) -> Result<()> {
-        frame.encode(&mut self.write_buffer);
-        self.stream.write_all(&self.write_buffer).await?;
-        self.write_buffer.clear();
-        Ok(())
-    }
 
     pub fn encode_to_buffer(&mut self, frame: &Frame) -> Result<()> {
-        frame.encode(&mut self.write_buffer);
+        frame.encode(&mut self.write_buffer.as_mut().unwrap());
         Ok(())
     }
 
     pub async fn write_and_flush(&mut self) -> Result<()>  {
-        self.stream.write_all(&self.write_buffer).await?;
-        self.write_buffer.clear();
+        let (_i, buffer) = self.stream.write_all(self.write_buffer.take().unwrap()).await;
+        self.write_buffer = Some(buffer);
+        if let Some(buffer) = self.write_buffer.as_mut() {
+            buffer.clear();
+        }
         Ok(())
     }
 
@@ -73,7 +71,7 @@ impl Connection {
     /// '$' : 批量字符串 (Bulk String) -> $5\r\nhello\r\n (先读长度，再读数据)
     /// '*' : 数组 (Array)             -> *2\r\n... (先读个数，再读元素)
     pub fn try_read_frame(&mut self) -> Result<Option<Frame>> {
-        if self.buffer.is_empty() {
+        if self.buffer.as_ref().unwrap().is_empty() {
             return Ok(None);
         }
 
@@ -87,12 +85,12 @@ impl Connection {
 
         // 第二阶段：从 buffer 中切出这段数据，做真正的解析
         // split_to 把 buffer 一分为二，前半段是独立的 BytesMut
-        let mut frame_buf = self.buffer.split_to(len);
+        let mut frame_buf = self.buffer.as_mut().unwrap().split_to(len);
         Self::parse_frame(&mut frame_buf).map(Some)
     }
 
     fn check_frame_complete(&self) -> Result<Option<usize>> {
-        let mut cursor = Cursor::new(&self.buffer[..]);
+        let mut cursor = Cursor::new(&self.buffer.as_ref().unwrap()[..]);
         self.check_frame_complete_inner(&mut cursor)
     }
 

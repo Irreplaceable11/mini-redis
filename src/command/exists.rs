@@ -29,7 +29,7 @@ impl Exists {
 }
 
 impl CommandExecute for Exists {
-    fn execute(self, ctx: &Context) -> Frame {
+    fn execute(self, ctx: &mut Context) -> Frame {
         let res = ctx.db().exists(self.keys);
         Frame::Integer(res as i64)
     }

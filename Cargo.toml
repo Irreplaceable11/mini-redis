@@ -6,6 +6,9 @@ edition = "2024"
 [dependencies]
 #异步运行
 monoio = "0.2.4"
+#使用linux socket套接字
+
+socket2 = { version = "0.6.3" , features = ["all"]}
 #错误处理
 anyhow = "1.0.102"
 

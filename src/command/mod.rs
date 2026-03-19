@@ -7,7 +7,7 @@ pub mod exists;
 pub mod ttl;
 pub mod expire;
 pub mod keys;
-pub mod publish;
+// pub mod publish;
 pub mod subscribe;
 pub mod unsubscribe;
 
@@ -19,7 +19,7 @@ use tracing::info;
 pub(crate) use parse::{extract_bytes, extract_i64, extract_string};
 
 pub(crate) trait CommandExecute {
-    fn execute(self, ctx: &Context) -> Frame;
+    fn execute(self, ctx:&mut Context) -> Frame;
 }
 
 
@@ -32,14 +32,14 @@ pub enum Command {
     Ttl(ttl::Ttl),
     Expire(expire::Expire),
     Keys(keys::Keys),
-    Publish(publish::Publish),
+    // Publish(publish::Publish),
     Subscribe(subscribe::Subscribe),
     Unsubscribe(unsubscribe::Unsubscribe),
     Unknown(String),
 }
 
 impl Command {
-    pub fn execute(self, ctx: &Context) -> Frame {
+    pub fn execute(self, ctx:&mut  Context) -> Frame {
         match self {
             Command::Ping(cmd) => cmd.execute(ctx),
             Command::Set(cmd) => cmd.execute(ctx),
@@ -48,7 +48,7 @@ impl Command {
             Command::Exist(cmd) => cmd.execute(ctx),
             Command::Ttl(cmd) => cmd.execute(ctx),
             Command::Expire(cmd) => cmd.execute(ctx),
-            Command::Publish(cmd)  => cmd.execute(ctx),
+            // Command::Publish(cmd)  => cmd.execute(ctx),
             Command::Unknown(cmd) => Frame::Error(format!("Command failed, unknown command:{:?}", cmd)),
             _ => Frame::Error("ERR command not implemented".to_string()),
         }
@@ -75,7 +75,7 @@ impl Command {
             b"TTL" | b"PTTL" => Ok(Command::Ttl(ttl::Ttl::parse(&cmd_name, &arg)?)),
             b"EXPIRE" | b"PEXPIRE" => Ok(Command::Expire(expire::Expire::parse(&cmd_name, &arg)?)),
             b"KEYS" => Ok(Command::Keys(keys::Keys::parse(&arg)?)),
-            b"PUBLISH" => Ok(Command::Publish(publish::Publish::parse(&arg)?)),
+            // b"PUBLISH" => Ok(Command::Publish(publish::Publish::parse(&arg)?)),
             b"SUBSCRIBE" => Ok(Command::Subscribe(subscribe::Subscribe::parse(&arg)?)),
             b"UNSUBSCRIBE" => Ok(Command::Unsubscribe(unsubscribe::Unsubscribe::parse(&arg)?)),
             _ => {

@@ -23,8 +23,8 @@ impl Keys {
     }
 
     /// 单独的 async execute，因为底层 db.keys() 需要 spawn_blocking
-    pub async fn execute(self, ctx: &Context) -> Frame {
-        let vec = ctx.db().keys(&self.key_pattern).await;
+    pub fn execute(self, ctx: &mut Context) -> Frame {
+        let vec = ctx.db().keys(&self.key_pattern);
         let results: Vec<Frame> = vec
             .into_iter()
             .map(|k| Frame::BulkString(Bytes::from(k.to_string())))

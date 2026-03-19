@@ -1,11 +1,6 @@
 use bytes::Bytes;
 use fast_glob::glob_match;
-use parking_lot::RwLock;
-use rayon::prelude::*;
-use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::collections::{hash_map, HashMap};
 use std::time::Instant;
 
 pub struct Entry {
@@ -20,35 +15,21 @@ impl Entry {
 }
 
 pub struct Db {
-    shards: Vec<Arc<RwLock<HashMap<Arc<str>, Entry>>>>,
-    shard_count: usize,
-    next_shard_index: AtomicUsize,
+    data: HashMap<String, Entry>
 }
-// 清理分片的数量
-const CLEANUP_BATCH_SIZE: usize = 16;
+
 
 impl Db {
     pub fn new() -> Db {
-        let shard_count = 256;
-        let mut shards = Vec::with_capacity(shard_count);
-
-        for _ in 0..shard_count {
-            let map = HashMap::new();
-            shards.push(Arc::new(RwLock::new(map)));
-        }
         Db {
-            shards,
-            shard_count,
-            next_shard_index: AtomicUsize::new(0),
+            data: HashMap::new(),
         }
     }
 
-    pub fn get(&self, key: &str) -> Option<Bytes> {
-        let idx = self.shard_index(key);
+    pub fn get(&mut self, key: &str) -> Option<Bytes> {
         let instant: Instant;
         {
-            let guard = self.shards[idx].read();
-            if let Some(entry) = guard.get(key) {
+            if let Some(entry) = self.data.get(key) {
                 if let Some(ttl) = entry.ttl {
                     instant = Instant::now();
                     if instant <= ttl {
@@ -62,21 +43,19 @@ impl Db {
             }
         }
 
-        self.double_check_remove(key, idx)
+        self.remove_if_expired(key)
     }
 
     pub fn set(
-        &self,
+        &mut self,
         key: &str,
         value: Bytes,
         ttl: Option<Instant>,
         nx: bool,
         xx: bool,
     ) -> Option<()> {
-        let idx = self.shard_index(&key);
 
-        let mut guard = self.shards[idx].write();
-        let existing_entry = guard.get(key);
+        let existing_entry = self.data.get(key);
 
         let is_expired =
             existing_entry.map_or(true, |e| e.ttl.map_or(false, |t| Instant::now() > t));
@@ -89,59 +68,37 @@ impl Db {
             return None;
         }
         let entry_new = Entry::new(value, ttl);
-        guard.insert(Arc::from(key), entry_new);
+        self.data.insert(key.to_string(), entry_new);
         Some(())
     }
 
-    pub fn del(&self, keys: Vec<String>) -> usize {
+    pub fn del(&mut self, keys: Vec<String>) -> usize {
         let mut del_result = 0;
 
-        let mut keys_map: HashMap<usize, Vec<String>> = HashMap::new();
-
-        for key in keys {
-            let i = self.shard_index(key.as_str());
-            keys_map.entry(i).or_insert_with(Vec::new).push(key);
-        }
-
-        for (idx, key_vec) in keys_map {
-            let mut guard = self.shards[idx].write();
-            for k in key_vec {
-                if guard.remove(k.as_str()).is_some() {
-                    del_result += 1;
-                }
+        for k in keys {
+            if self.data.remove(k.as_str()).is_some() {
+                del_result += 1
             }
         }
         del_result
     }
 
-    pub fn exists(&self, keys: Vec<String>) -> usize {
+    pub fn exists(&mut self, keys: Vec<String>) -> usize {
         let mut exists_result = 0;
 
-        let mut keys_map: HashMap<usize, Vec<String>> = HashMap::new();
-        for key in keys {
-            let i = self.shard_index(key.as_str());
-            keys_map.entry(i).or_insert_with(Vec::new).push(key);
-        }
-        for (idx, key_vec) in keys_map {
-            let guard = self.shards[idx].read();
-            for k in key_vec {
-                if guard
-                    .get(k.as_str())
-                    .map_or(false, |v| v.ttl.map_or(true, |t| Instant::now() < t))
-                {
-                    exists_result += 1;
-                }
+        for k in keys {
+            if self.data.get(k.as_str()).map_or(false, |v| v.ttl.map_or(true, |t| Instant::now() < t)) {
+            exists_result += 1
             }
         }
+
         exists_result
     }
 
-    pub fn ttl(&self, key: &str, return_millis: bool) -> i64 {
-        let idx = self.shard_index(key);
+    pub fn ttl(&mut self, key: &str, return_millis: bool) -> i64 {
         let mut need_cleanup = false;
         {
-            let guard = self.shards[idx].read();
-            if let Some(entry) = guard.get(key) {
+            if let Some(entry) = self.data.get(key) {
                 if let Some(ttl) = entry.ttl {
                     if Instant::now() < ttl {
                         //存在未过期
@@ -160,106 +117,72 @@ impl Db {
             }
         }
         if need_cleanup {
-            self.double_check_remove(key, idx);
+            self.remove_if_expired(key);
         }
         // 不存在或者过期
         -2
     }
 
-    pub fn expire(&self, key: &str, expire_at: Option<Instant>) -> u8 {
-        let idx = self.shard_index(key);
-        let mut guard = self.shards[idx].write();
+    /// 设置或移除 key 的过期时间
+    /// 
+    /// - expire_at: None -> 删除 key (类似 DEL)
+    /// - expire_at: Some(instant) -> 设置新的过期时间 (类似 EXPIREAT)
+    /// 
+    /// 返回值:
+    /// - 1: 操作成功 (key 存在并被更新/删除)
+    /// - 0: 操作失败 (key 不存在或已过期)
+    pub fn expire(&mut self, key: &str, expire_at: Option<Instant>) -> u8 {
 
         match expire_at {
             // 如果没有过期时间，代表可能是想删除（或者你可以根据需求改为持久化）
             None => {
-                if guard.remove(key).is_some() {
+                if self.data.remove(key).is_some() {
                     1
                 } else {
                     0
                 }
             }
             Some(new_ttl) => {
-                if let Some(entry) = guard.get_mut(key) {
-                    // 检查当前是否已经过期（惰性删除逻辑）
-                    if let Some(old_ttl) = entry.ttl {
-                        if Instant::now() > old_ttl {
-                            guard.remove(key);
-                            return 0; // 已经过期了，视作不存在
+                match self.data.entry(key.to_string()) {
+                    hash_map::Entry::Vacant(_) => 0,
+                    hash_map::Entry::Occupied(mut entry) => {
+                        let value = entry.get_mut();
+                        if let Some(old_ttl) = value.ttl {
+                            if Instant::now() > old_ttl {
+                                entry.remove();
+                                return 0; // 已经过期了，视作不存在
+                            }
                         }
-                    }
 
-                    // 原地修改 TTL，不需要 clone value
-                    entry.ttl = Some(new_ttl);
-                    1
-                } else {
-                    0 // Key 不存在
+                        // 原地修改 TTL，不需要 clone value
+                        value.ttl = Some(new_ttl);
+                        1
+                    }
                 }
             }
         }
     }
 
-    /// 异步版本：通过 spawn_blocking 将 rayon 并行扫描
-    /// 放到 tokio 的阻塞线程池中执行，避免阻塞 async worker thread
-    pub async fn keys(&self, pattern: &str) -> Vec<Arc<str>> {
-        // spawn_blocking 需要 'static 生命周期的闭包
-        // 而 &self 和 &str 都是借用，所以需要 clone 必要的数据
-        let shards = self.shards.clone();
-        let pattern = pattern.to_string();
 
-        tokio::task::spawn_blocking(move || {
-            shards
-                .par_iter()
-                .flat_map(|shard| {
-                    // 先收集 key 引用再做匹配，减少锁持有时间
-                    let key_list: Vec<_> = { shard.read().keys().cloned().collect() };
-                    key_list
-                        .into_iter()
-                        .filter(|k| glob_match(&pattern, k.as_ref()))
-                        .collect::<Vec<_>>()
-                })
-                .collect()
-        })
-        .await
-        .unwrap_or_default()
+    pub fn keys(&self, pattern: &str) -> Vec<String> {
+        self.data.keys()
+            .filter(|k| glob_match(pattern, k))
+            .cloned()
+            .collect()
     }
 
-    pub fn clean_up(&self) {
-        // 使用基于轮询的过期key清理方式
-        // 使用随机的缺点是内存不连续，有可能某个分片倒霉一直抽不到
+    pub fn clean_up(&mut self) {
         let instant = Instant::now();
 
-        let start = self
-            .next_shard_index
-            .fetch_add(CLEANUP_BATCH_SIZE, Ordering::Relaxed);
-        let total = self.shards.len();
-
-        for i in 0..CLEANUP_BATCH_SIZE {
-            let shard_idx = (start + i) % total;
-            if let Some(mut guard) = self.shards[shard_idx].try_write() {
-                guard.retain(|_, v| match v.ttl {
-                    None => true,
-                    Some(expiry) => instant < expiry,
-                });
-            }
-        }
+        self.data.retain(|_, v| v.ttl.map_or(true, |t| instant < t));
     }
 
-    fn shard_index(&self, key: &str) -> usize {
-        let mut hasher = DefaultHasher::new();
 
-        key.hash(&mut hasher);
-
-        let hash = hasher.finish();
-        hash as usize & (self.shard_count - 1)
-    }
-
-    fn double_check_remove(&self, key: &str, idx: usize) -> Option<Bytes> {
-        let mut guard = self.shards[idx].write();
-        if let Some(entry) = guard.get(key) {
+    fn remove_if_expired(&mut self, key: &str) -> Option<Bytes> {
+        if let Some(entry) = self.data.get(key) {
             if let Some(ttl) = entry.ttl {
                 if Instant::now() > ttl {
-                    guard.remove(key);
+                    self.data.remove(key);
                     None
                 } else {
                     Some(entry.value.clone())

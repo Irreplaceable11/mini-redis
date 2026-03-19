@@ -1,6 +1,8 @@
+use std::net::SocketAddr;
 use anyhow::Result;
 use monoio::net::TcpListener;
 use monoio::RuntimeBuilder;
+use socket2::{Domain, Socket, Type};
 use time::format_description;
 use time::macros::offset;
 use tracing::info;
@@ -28,6 +30,25 @@ fn main() -> Result<()> {
         });
 
    Ok(())
+}
+
+fn create_reuse_port_listener(addr: SocketAddr) -> Result<TcpListener> {
+    // 1. 创建底层 Socket
+    let domain = if addr.is_ipv4() { Domain::IPV4 } else { Domain::IPV6 };
+    let socket = Socket::new(domain, Type::STREAM, None)?;
+
+    // 2. 设置关键选项
+    socket.set_reuse_address(true)?;
+    socket.set_reuse_port(true)?; // 核心：允许端口复用
+    socket.set_nonblocking(true)?; // 异步必须是非阻塞
+
+    // 3. 绑定并监听
+    socket.bind(&addr.into())?;
+    socket.listen(1024)?;
+
+    // 4. 转换成 monoio 的 TcpListener
+    let std_listener: std::net::TcpListener = socket.into();
+    Ok(TcpListener::from_std(std_listener)?)
 }
 
 fn init_log() {

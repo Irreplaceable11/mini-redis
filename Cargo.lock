@@ -356,6 +356,7 @@ dependencies = [
  "itoa",
  "memchr",
  "monoio",
+ "socket2 0.6.3",
  "time",
  "tracing",
  "tracing-subscriber",
@@ -389,7 +390,7 @@ dependencies = [
  "monoio-macros",
  "nix",
  "pin-project-lite",
- "socket2",
+ "socket2 0.5.10",
  "windows-sys 0.48.0",
 ]
 
@@ -656,6 +657,16 @@ checksum = "e22376abed350d73dd1cd119b57ffccad95b4e585a7cda43e286245ce23c0678"
 dependencies = [
  "libc",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "socket2"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
