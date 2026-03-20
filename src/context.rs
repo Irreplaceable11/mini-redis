@@ -1,17 +1,18 @@
+use std::sync::Arc;
 use crate::db::Db;
 use crate::pubsub::PubSub;
 
 pub struct Context {
-    db: Db,
+    db: Arc<Db>,
     pub_sub: PubSub
 }
 
 impl Context {
     pub fn new(db: Db, pub_sub: PubSub) -> Self {
-        Context {db, pub_sub }
+        Context {db: Arc::new(db), pub_sub }
     }
     
-    pub fn db(&self) -> &Db {
+    pub fn db(&self) -> &Arc<Db> {
         &self.db
     }
     

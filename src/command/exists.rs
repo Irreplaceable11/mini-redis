@@ -1,17 +1,15 @@
-
 use crate::frame::Frame;
 use anyhow::{anyhow, Result};
-use crate::command::{extract_string, CommandExecute};
+use bytes::Bytes;
+use crate::command::{extract_bytes, CommandExecute};
 use crate::context::Context;
 
 pub struct Exists {
-
-    keys: Vec<String>
+    keys: Vec<Bytes>,
 }
 
 impl Exists {
-
-    pub fn new(keys: Vec<String>) ->  Exists{
+    pub fn new(keys: Vec<Bytes>) -> Exists {
         Exists { keys }
     }
 
@@ -20,12 +18,11 @@ impl Exists {
             return Err(anyhow!("wrong arg number for command 'exists'"));
         }
         let keys = args
-            .into_iter()
-            .map(extract_string)
-            .collect::<Result<Vec<String>>>()?;
+            .iter()
+            .map(extract_bytes)
+            .collect::<Result<Vec<Bytes>>>()?;
         Ok(Exists { keys })
     }
-    
 }
 
 impl CommandExecute for Exists {

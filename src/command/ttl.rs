@@ -1,13 +1,14 @@
-use crate::command::{extract_string, CommandExecute};
+use crate::command::{extract_bytes, CommandExecute};
 use crate::context::Context;
 use crate::frame::Frame;
 use anyhow::{anyhow, Result};
+use bytes::Bytes;
 
 pub struct Ttl {
-    pub key: String,
-
-    pub ttl_type: TtlType
+    pub key: Bytes,
+    pub ttl_type: TtlType,
 }
+
 #[derive(PartialEq)]
 pub enum TtlType {
     Seconds,
@@ -15,8 +16,8 @@ pub enum TtlType {
 }
 
 impl Ttl {
-    pub fn new(key: String, ttl_type: TtlType) -> Self {
-        Ttl { key , ttl_type}
+    pub fn new(key: Bytes, ttl_type: TtlType) -> Self {
+        Ttl { key, ttl_type }
     }
 
     pub fn parse(cmd_name: &[u8], args: &[Frame]) -> Result<Ttl> {
@@ -24,14 +25,12 @@ impl Ttl {
             return Err(anyhow!("wrong arg number for command 'ttl or pttl'"));
         }
         match &cmd_name[..] {
-            b"TTL" => Ok(Ttl::new(extract_string(&args[0])?, TtlType::Seconds)),
-            b"PTTL" => Ok(Ttl::new(extract_string(&args[0])?, TtlType::Milliseconds)),
+            b"TTL" => Ok(Ttl::new(extract_bytes(&args[0])?, TtlType::Seconds)),
+            b"PTTL" => Ok(Ttl::new(extract_bytes(&args[0])?, TtlType::Milliseconds)),
             _ => Err(anyhow!("ERR unknown TTL command")),
         }
-
     }
 }
-
 
 impl CommandExecute for Ttl {
     fn execute(self, ctx: &Context) -> Frame {

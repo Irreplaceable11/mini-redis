@@ -1,20 +1,21 @@
-use crate::command::{extract_string, CommandExecute};
+use crate::command::{extract_bytes, CommandExecute};
 use crate::context::Context;
 use crate::frame::Frame;
 use anyhow::Result;
+use bytes::Bytes;
 
 pub struct Get {
-    pub key: String,
+    pub key: Bytes,
 }
 
 impl Get {
-    pub fn new(key: String) -> Self {
+    pub fn new(key: Bytes) -> Self {
         Get { key }
     }
 
     pub fn parse(args: &[Frame]) -> Result<Get> {
-        let key = extract_string(&args[0]);
-        Ok(Get::new(key?))
+        let key = extract_bytes(&args[0])?;
+        Ok(Get::new(key))
     }
 }
 
@@ -24,6 +25,5 @@ impl CommandExecute for Get {
             Some(value) => Frame::BulkString(value),
             None => Frame::Null,
         }
-
     }
 }

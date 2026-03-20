@@ -1,14 +1,15 @@
-use crate::command::{CommandExecute, extract_string};
+use crate::command::{extract_bytes, CommandExecute};
 use crate::context::Context;
 use crate::frame::Frame;
 use anyhow::{Result, anyhow};
+use bytes::Bytes;
 
 pub struct Del {
-    keys: Vec<String>,
+    keys: Vec<Bytes>,
 }
 
 impl Del {
-    pub fn new(keys: Vec<String>) -> Del {
+    pub fn new(keys: Vec<Bytes>) -> Del {
         Del { keys }
     }
 
@@ -16,11 +17,10 @@ impl Del {
         if args.is_empty() {
             return Err(anyhow!("wrong arg number for command 'del'"));
         }
-        let keys: Vec<String> = args
+        let keys: Vec<Bytes> = args
             .iter()
-            .map(extract_string)
-            .collect::<Result<Vec<String>>>()?;
-
+            .map(extract_bytes)
+            .collect::<Result<Vec<Bytes>>>()?;
         Ok(Del::new(keys))
     }
 }

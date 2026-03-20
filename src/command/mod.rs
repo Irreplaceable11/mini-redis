@@ -14,6 +14,7 @@ pub mod unsubscribe;
 use crate::frame::Frame;
 use crate::context::Context;
 use anyhow::Result;
+use bytes::Bytes;
 use tracing::info;
 // 导出解析辅助函数，供各个命令模块使用
 pub(crate) use parse::{extract_bytes, extract_i64, extract_string};
@@ -49,8 +50,8 @@ impl Command {
             Command::Ttl(cmd) => cmd.execute(ctx),
             Command::Expire(cmd) => cmd.execute(ctx),
             Command::Publish(cmd)  => cmd.execute(ctx),
-            Command::Unknown(cmd) => Frame::Error(format!("Command failed, unknown command:{:?}", cmd)),
-            _ => Frame::Error("ERR command not implemented".to_string()),
+            Command::Unknown(cmd) => Frame::Error(Bytes::from(format!("Command failed, unknown command:{:?}", cmd))),
+            _ => Frame::Error(Bytes::from("ERR command not implemented".to_string())),
         }
     }
 }
@@ -64,8 +65,8 @@ impl Command {
         // 2. 提取命令名（第一个元素）
         // 3. 根据命令名分发到对应模块
         // 4. 返回 Command 枚举
-        let (cmd_name, arg) = Command::parse_array(frame)?;
-
+        let (buf, len, arg) = Command::parse_array(frame)?;
+        let cmd_name = &buf[..len];
         match &cmd_name[..] {
             b"PING" => Ok(Command::Ping(ping::Ping::parse(&arg)?)),
             b"SET" => Ok(Command::Set(set::Set::parse(&arg)?)),
@@ -79,14 +80,14 @@ impl Command {
             b"SUBSCRIBE" => Ok(Command::Subscribe(subscribe::Subscribe::parse(&arg)?)),
             b"UNSUBSCRIBE" => Ok(Command::Unsubscribe(unsubscribe::Unsubscribe::parse(&arg)?)),
             _ => {
-                let cmd_name_string = String::from_utf8(cmd_name)?;
+                let cmd_name_string = str::from_utf8(cmd_name)?;
                 info!("unknown command: {}", cmd_name_string);
-                Ok(Command::Unknown(cmd_name_string))
+                Ok(Command::Unknown(cmd_name_string.to_string()))
             }
         }
     }
 
-    fn parse_array(frame: Frame) -> Result<(Vec<u8>, Vec<Frame>)> {
+    fn parse_array(frame: Frame) -> Result<([u8; 16], usize, Vec<Frame>)> {
         match frame {
             Frame::Array(arr) => {
                 if arr.is_empty() {
@@ -97,14 +98,21 @@ impl Command {
                 let mut iter = arr.into_iter();
                 let cmd_frame = iter.next().expect("checked non-empty");
 
-                let cmd_name = match cmd_frame {
+                let bytes = match cmd_frame {
                     Frame::BulkString(bytes) => {
                         bytes
                     }
                     _ => return Err(anyhow::anyhow!("ERR invalid command name"))
-                }.to_ascii_uppercase();
+                };
 
-                Ok((cmd_name, iter.collect::<Vec<_>>()))  // 返回命令名和剩余参数
+                // 栈上 buffer，16 字节足够所有 Redis 命令
+                let mut buf = [0u8; 16];
+                let len = bytes.len().min(16);
+
+                for i in 0..len {
+                    buf[i] = bytes[i].to_ascii_uppercase();
+                }
+                Ok((buf, len, iter.collect::<Vec<_>>()))  // 返回命令名和剩余参数
             }
             _ => Err(anyhow::anyhow!("ERR protocol error: expected array"))
         }

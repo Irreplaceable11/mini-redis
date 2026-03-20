@@ -2,6 +2,7 @@ use crate::command::extract_string;
 use crate::context::Context;
 use crate::{command::CommandExecute, frame::Frame};
 use anyhow::{anyhow, Result};
+use bytes::Bytes;
 
 pub struct Ping {
     pub msg: Option<String>,
@@ -39,7 +40,7 @@ impl Ping {
 impl CommandExecute for Ping {
     fn execute(self, _ctx: &Context) -> Frame {
          match self.msg {
-            None => Frame::SimpleString(PONG.into()),
+            None => Frame::SimpleString(Bytes::from_static(b"PONG")),
             Some(msg) => Frame::BulkString(msg.into())
         }
     }

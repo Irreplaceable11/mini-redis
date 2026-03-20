@@ -1,6 +1,6 @@
 use crate::frame::Frame;
 use anyhow::Result;
-use bytes::{Buf, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 use memchr::memmem;
 use std::io::{Cursor};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -18,8 +18,32 @@ impl Connection {
     pub fn new(stream: TcpStream) -> Self {
         Connection {
             stream,
-            buffer: BytesMut::with_capacity(4096),
-            write_buffer: BytesMut::with_capacity(4096),
+            buffer: BytesMut::with_capacity(32 * 1024),
+            write_buffer: BytesMut::with_capacity(32 * 1024),
+        }
+    }
+
+    /// 测试专用：直接用 buffer 构造，绕过 TcpStream
+    #[cfg(test)]
+    fn from_buffer(buffer: BytesMut) -> Self {
+        use tokio::net::TcpListener;
+        // 创建一个假的 TcpStream（测试中不会用到）
+        let stream = {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let addr = listener.local_addr().unwrap();
+                let (stream, _) = tokio::join!(
+                    async { tokio::net::TcpStream::connect(addr).await.unwrap() },
+                    async { listener.accept().await.unwrap().0 }
+                );
+                stream
+            })
+        };
+        Connection {
+            stream,
+            buffer,
+            write_buffer: BytesMut::new(),
         }
     }
 
@@ -40,14 +64,7 @@ impl Connection {
             }
         }
     }
-
-    pub async fn write_frame(&mut self, frame: &Frame) -> Result<()> {
-        frame.encode(&mut self.write_buffer);
-        self.stream.write_all(&self.write_buffer).await?;
-        self.write_buffer.clear();
-        Ok(())
-    }
-
+    
     pub fn encode_to_buffer(&mut self, frame: &Frame) -> Result<()> {
         frame.encode(&mut self.write_buffer);
         Ok(())
@@ -77,18 +94,110 @@ impl Connection {
             return Ok(None);
         }
 
-        // 第一阶段：用 Cursor 检查帧是否完整，拿到总长度
-        let len = match self.check_frame_complete() {
-            Ok(Some(len)) => len,
-            Ok(None) => return Ok(None),
-            Err(e) if e.to_string().contains("Incomplete") => return Ok(None),
-            Err(e) => return Err(e),
-        };
+        // // 第一阶段：用 Cursor 检查帧是否完整，拿到总长度
+        // let len = match self.check_frame_complete() {
+        //     Ok(Some(len)) => len,
+        //     Ok(None) => return Ok(None),
+        //     Err(e) if e.to_string().contains("Incomplete") => return Ok(None),
+        //     Err(e) => return Err(e),
+        // };
 
-        // 第二阶段：从 buffer 中切出这段数据，做真正的解析
-        // split_to 把 buffer 一分为二，前半段是独立的 BytesMut
-        let mut frame_buf = self.buffer.split_to(len);
-        Self::parse_frame(&mut frame_buf).map(Some)
+        // // 第二阶段：从 buffer 中切出这段数据，做真正的解析
+        // // split_to 把 buffer 一分为二，前半段是独立的 BytesMut
+        // let mut frame_buf = self.buffer.split_to(len);
+        // Self::parse_frame(&mut frame_buf).map(Some)
+        // 一遍扫描：既检查完整性，又直接解析
+        let mut pos = 0;
+        match self.parse_at(&mut pos) {
+            Ok(Some(frame)) => {
+                // pos 现在指向帧末尾，一次性推进 buffer
+                self.buffer.advance(pos);
+                Ok(Some(frame))
+            }
+            Ok(None) => Ok(None),  // 数据不完整
+            Err(e) => Err(e),
+        }
+    }
+
+    fn parse_at(&mut self, pos: &mut usize) -> Result<Option<Frame>> {
+        if *pos >= self.buffer.len() {
+            return Ok(None);
+        }
+        let type_byte = self.buffer[*pos];
+        *pos += 1;  // 跳过类型字节
+        match type_byte {
+            b'+' | b'-' | b':' => self.parse_simple_at(type_byte, pos),
+            b'$' => self.parse_bulk_string_at(pos),
+            b'*' => self.parse_array_at(pos),
+             _ => Err(anyhow::anyhow!("Unexpected frame type: {}", type_byte)),
+        }
+    }
+
+    fn parse_simple_at(&mut self, type_byte: u8, pos: &mut usize) -> Result<Option<Frame>> {
+        match Self::find_crlf(&self.buffer[*pos..]) {
+            Some( curr_pos) => {
+                let bytes_mut = Bytes::copy_from_slice(&self.buffer[*pos..*pos + curr_pos - 2]);
+                *pos += curr_pos;//截取完再移动pos
+                match type_byte {
+                    b'+' => Ok(Some(Frame::SimpleString(bytes_mut))),
+                    b'-' => Ok(Some(Frame::Error(bytes_mut))),
+                    b':' => Ok(Some(Frame::Integer(str::from_utf8(&bytes_mut)?.parse()?))),
+                    _ => unreachable!(),
+                }
+
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn parse_bulk_string_at(&mut self, pos: &mut usize) -> Result<Option<Frame>> {
+        // 读长度行，找 \r\n
+        let crlf_pos = match Self::find_crlf(&self.buffer[*pos..]) {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+        // 提取长度数字（去掉 \r\n）
+        let length = std::str::from_utf8(&self.buffer[*pos..*pos + crlf_pos - 2])?.parse::<isize>()?;
+        *pos += crlf_pos; // 跳过长度行 + \r\n
+
+        if length == -1 {
+            return Ok(Some(Frame::Null));
+        }
+
+        let data_len = length as usize;
+        // 检查 buffer 里是否有足够的数据体 + \r\n
+        if *pos + data_len + 2 > self.buffer.len() {
+            return Ok(None);
+        }
+        // 切出数据体
+        let data = Bytes::copy_from_slice(&self.buffer[*pos..*pos + data_len]);
+        *pos += data_len + 2; // 跳过数据体 + \r\n
+        Ok(Some(Frame::BulkString(data)))
+    }
+    
+    fn parse_array_at(&mut self, pos: &mut usize) -> Result<Option<Frame>> {
+        // 读元素个数行，找 \r\n
+        let crlf_pos = match Self::find_crlf(&self.buffer[*pos..]) {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+        let length = std::str::from_utf8(&self.buffer[*pos..*pos + crlf_pos - 2])?.parse::<isize>()?;
+        *pos += crlf_pos; // 跳过个数行 + \r\n
+
+        if length == -1 {
+            return Ok(Some(Frame::Null));
+        }
+
+        let array_len = length as usize;
+        let mut frames = Vec::with_capacity(array_len);
+        for _ in 0..array_len {
+            // 递归解析每个元素，parse_at 会自动推进 pos
+            match self.parse_at(pos)? {
+                Some(frame) => frames.push(frame),
+                None => return Ok(None), // 某个元素不完整，整个数组也不完整
+            }
+        }
+        Ok(Some(Frame::Array(frames)))
     }
 
     fn check_frame_complete(&self) -> Result<Option<usize>> {
@@ -204,15 +313,14 @@ impl Connection {
             .ok_or_else(|| anyhow::anyhow!("Incomplete"))?;
 
         // split_to 切出这一行（包含 \r\n），src 中剩余后面的数据
-        let line = src.split_to(crlf_pos);
+        let mut line = src.split_to(crlf_pos);
         // 去掉末尾的 \r\n
-        let content = &line[..line.len() - 2];
-        let string = std::str::from_utf8(content)?.to_string();
+        line.truncate(line.len() - 2);
 
         match type_byte {
-            b'+' => Ok(Frame::SimpleString(string)),
-            b'-' => Ok(Frame::Error(string)),
-            b':' => Ok(Frame::Integer(string.parse()?)),
+            b'+' => Ok(Frame::SimpleString(line.freeze())),
+            b'-' => Ok(Frame::Error(line.freeze())),
+            b':' => Ok(Frame::Integer(line.get_i64())),
             _ => unreachable!(),
         }
     }
@@ -258,5 +366,183 @@ impl Connection {
         }
 
         Ok(Frame::Array(frames))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 辅助函数：把字节塞进 Connection 的 buffer，调用 try_read_frame
+    fn parse(data: &[u8]) -> Result<Option<Frame>> {
+        let buf = BytesMut::from(data);
+        let mut conn = Connection::from_buffer(buf);
+        conn.try_read_frame()
+    }
+
+    // ==================== SimpleString ====================
+
+    #[test]
+    fn test_simple_string() {
+        let frame = parse(b"+OK\r\n").unwrap().unwrap();
+        match frame {
+            Frame::SimpleString(s) => assert_eq!(s, &b"OK"[..]),
+            _ => panic!("期望 SimpleString，得到 {:?}", frame),
+        }
+    }
+
+    // ==================== Error ====================
+
+    #[test]
+    fn test_error() {
+        let frame = parse(b"-ERR unknown\r\n").unwrap().unwrap();
+        match frame {
+            Frame::Error(s) => assert_eq!(s, &b"ERR unknown"[..]),
+            _ => panic!("期望 Error，得到 {:?}", frame),
+        }
+    }
+
+    // ==================== Integer ====================
+
+    #[test]
+    fn test_integer() {
+        let frame = parse(b":42\r\n").unwrap().unwrap();
+        match frame {
+            Frame::Integer(n) => assert_eq!(n, 42),
+            _ => panic!("期望 Integer，得到 {:?}", frame),
+        }
+    }
+
+    // ==================== BulkString ====================
+
+    #[test]
+    fn test_bulk_string() {
+        let frame = parse(b"$5\r\nhello\r\n").unwrap().unwrap();
+        match frame {
+            Frame::BulkString(s) => assert_eq!(s, &b"hello"[..]),
+            _ => panic!("期望 BulkString，得到 {:?}", frame),
+        }
+    }
+
+    #[test]
+    fn test_bulk_string_null() {
+        let frame = parse(b"$-1\r\n").unwrap().unwrap();
+        assert!(matches!(frame, Frame::Null));
+    }
+
+    #[test]
+    fn test_bulk_string_empty() {
+        let frame = parse(b"$0\r\n\r\n").unwrap().unwrap();
+        match frame {
+            Frame::BulkString(s) => assert_eq!(s.len(), 0),
+            _ => panic!("期望空 BulkString，得到 {:?}", frame),
+        }
+    }
+
+    // ==================== Array ====================
+
+    #[test]
+    fn test_array_simple() {
+        // *2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n
+        let frame = parse(b"*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n").unwrap().unwrap();
+        match frame {
+            Frame::Array(arr) => {
+                assert_eq!(arr.len(), 2);
+                assert!(matches!(&arr[0], Frame::BulkString(s) if s == &b"foo"[..]));
+                assert!(matches!(&arr[1], Frame::BulkString(s) if s == &b"bar"[..]));
+            }
+            _ => panic!("期望 Array，得到 {:?}", frame),
+        }
+    }
+
+    #[test]
+    fn test_array_mixed_types() {
+        // *3\r\n+OK\r\n:100\r\n$5\r\nhello\r\n
+        let frame = parse(b"*3\r\n+OK\r\n:100\r\n$5\r\nhello\r\n").unwrap().unwrap();
+        match frame {
+            Frame::Array(arr) => {
+                assert_eq!(arr.len(), 3);
+                assert!(matches!(&arr[0], Frame::SimpleString(s) if s == &b"OK"[..]));
+                assert!(matches!(&arr[1], Frame::Integer(100)));
+                assert!(matches!(&arr[2], Frame::BulkString(s) if s == &b"hello"[..]));
+            }
+            _ => panic!("期望 Array，得到 {:?}", frame),
+        }
+    }
+
+    #[test]
+    fn test_array_null() {
+        let frame = parse(b"*-1\r\n").unwrap().unwrap();
+        assert!(matches!(frame, Frame::Null));
+    }
+
+    #[test]
+    fn test_nested_array() {
+        // *2\r\n*2\r\n:1\r\n:2\r\n*2\r\n:3\r\n:4\r\n
+        let frame = parse(b"*2\r\n*2\r\n:1\r\n:2\r\n*2\r\n:3\r\n:4\r\n").unwrap().unwrap();
+        match frame {
+            Frame::Array(outer) => {
+                assert_eq!(outer.len(), 2);
+                match &outer[0] {
+                    Frame::Array(inner) => {
+                        assert_eq!(inner.len(), 2);
+                        assert!(matches!(&inner[0], Frame::Integer(1)));
+                        assert!(matches!(&inner[1], Frame::Integer(2)));
+                    }
+                    _ => panic!("期望嵌套 Array"),
+                }
+            }
+            _ => panic!("期望 Array，得到 {:?}", frame),
+        }
+    }
+
+    // ==================== 不完整数据 ====================
+
+    #[test]
+    fn test_incomplete_simple_string() {
+        // 没有 \r\n 结尾
+        assert!(parse(b"+OK").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_incomplete_bulk_string_no_data() {
+        // 有长度行但没有数据体
+        assert!(parse(b"$5\r\n").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_incomplete_bulk_string_partial_data() {
+        // 数据体不完整
+        assert!(parse(b"$5\r\nhel").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_incomplete_array() {
+        // 声明2个元素但只有1个
+        assert!(parse(b"*2\r\n$3\r\nfoo\r\n").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_empty_buffer() {
+        assert!(parse(b"").unwrap().is_none());
+    }
+
+    // ==================== buffer 推进验证 ====================
+
+    #[test]
+    fn test_buffer_advance_after_parse() {
+        // buffer 里放两个帧，解析第一个后 buffer 应该只剩第二个
+        let data = b"+OK\r\n+PONG\r\n";
+        let buf = BytesMut::from(&data[..]);
+        let mut conn = Connection::from_buffer(buf);
+
+        let frame1 = conn.try_read_frame().unwrap().unwrap();
+        assert!(matches!(frame1, Frame::SimpleString(s) if s == &b"OK"[..]));
+
+        let frame2 = conn.try_read_frame().unwrap().unwrap();
+        assert!(matches!(frame2, Frame::SimpleString(s) if s == &b"PONG"[..]));
+
+        // buffer 应该空了
+        assert!(conn.try_read_frame().unwrap().is_none());
     }
 }
