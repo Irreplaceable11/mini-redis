@@ -3,9 +3,9 @@ use bytes::{BufMut, Bytes, BytesMut};
 #[derive(Debug)]
 pub enum Frame {
     // 简单字符串
-    SimpleString(String),
+    SimpleString(Bytes),
     // 错误
-    Error(String),
+    Error(Bytes),
     // 数字
     Integer(i64),
     // 批量字符串
@@ -72,13 +72,13 @@ impl Frame {
         match self {
             Frame::SimpleString(s) => {
                 buf.put_u8(b'+');
-                buf.put_slice(s.as_bytes());
+                buf.put_slice(s);
                 buf.put_slice(CRLF);
             }
 
             Frame::Error(s) => {
                 buf.put_u8(b'-');
-                buf.put_slice(s.as_bytes());
+                buf.put_slice(s);
                 buf.put_slice(CRLF);
             }
             Frame::Integer(i) => {

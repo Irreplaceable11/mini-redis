@@ -47,7 +47,7 @@ pub async fn handle_connection(socket: TcpStream, context: Arc<Context>) -> Resu
                     conn.encode_to_buffer(&resp)?;
                 }
                 Err(err) => {
-                    conn.encode_to_buffer(&frame::Frame::Error(err.to_string()))?;
+                    conn.encode_to_buffer(&Frame::Error(Bytes::from(err.to_string())))?;
                 }
             }
         }

@@ -11,10 +11,15 @@ use mini_redis::pubsub::PubSub;
 use time::macros::offset;
 use tracing::Instrument;
 use tracing::{info, info_span};
-use tracing_subscriber::fmt;
+use tracing_subscriber::{EnvFilter, fmt};
 
-#[tokio::main(flavor = "current_thread")]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+#[tokio::main]
+
 async fn main() -> Result<()> {
+
     // redis-benchmark -h 127.0.0.1 -p 6377 -c 50 -n 100000 -t get,set -P 16
     // redis基准测试 pipeline模式 get qps:719424/s set qps:354609/s (windows 11 24h2数据)
     // pipeline模式 get qps:1449275/s set qps:970873/s (wsl2 ubuntu 24.04)
@@ -60,5 +65,7 @@ async fn init_log() {
     )
     .expect("时间格式字符串无效");
     let timer = fmt::time::OffsetTime::new(offset!(+8), timer_format);
-    tracing_subscriber::fmt().with_timer(timer).init();
+    tracing_subscriber::fmt()
+    .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("error")))
+    .with_timer(timer).init();
 }

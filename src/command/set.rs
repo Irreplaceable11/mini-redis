@@ -10,7 +10,7 @@ use crate::command::{extract_bytes, extract_string, CommandExecute};
 use crate::context::Context;
 
 pub struct Set {
-    pub key: String,
+    pub key: Bytes,
 
     pub value: Bytes,
 
@@ -27,7 +27,7 @@ pub enum Expiration {
 }
 impl Set {
     pub fn new(
-        key: String,
+        key: Bytes,
         value: Bytes,
         ttl: Option<Expiration>,
         nx: bool,
@@ -47,7 +47,7 @@ impl Set {
             return Err(anyhow!("ERR wrong number of arguments for 'set' command"));
         }
 
-        let key = extract_string(&args[0])?;
+        let key = extract_bytes(&args[0])?;
 
         let value = extract_bytes(&args[1])?;
 
@@ -123,8 +123,8 @@ impl Set {
 impl CommandExecute for Set {
     fn execute(self, ctx: &Context) -> Frame {
         let instant = self.expires_at_direct();
-        match ctx.db().set(&self.key, self.value, instant, self.nx, self.xx) {
-            Some(_) => Frame::SimpleString("OK".to_string()),
+        match ctx.db().set(self.key, self.value, instant, self.nx, self.xx) {
+            Some(_) => Frame::SimpleString(Bytes::from_static(b"OK")),
             None => Frame::Null
         }
 

@@ -1,16 +1,14 @@
 use crate::frame::Frame;
 use std::time::{Duration, Instant};
 
-use crate::command::{extract_i64, extract_string, CommandExecute};
+use crate::command::{extract_bytes, extract_i64, CommandExecute};
 use crate::context::Context;
 use anyhow::{anyhow, Result};
+use bytes::Bytes;
 
 pub struct Expire {
-
-    pub key: String,
-
+    pub key: Bytes,
     pub expire_at: ExpireType,
-
 }
 
 #[derive(PartialEq)]
@@ -20,21 +18,20 @@ pub enum ExpireType {
 }
 
 impl Expire {
-    pub fn new(key: String, expire_at: ExpireType) -> Expire {
+    pub fn new(key: Bytes, expire_at: ExpireType) -> Expire {
         Expire { key, expire_at }
     }
 
-
     pub fn parse(cmd_name: &[u8], args: &[Frame]) -> Result<Expire> {
         if args.is_empty() {
-            return Err(anyhow!("wrong arg number for command 'expire'"))
+            return Err(anyhow!("wrong arg number for command 'expire'"));
         }
-        let key = extract_string(&args[0])?;
+        let key = extract_bytes(&args[0])?;
         let expire_at = extract_i64(&args[1])?;
         match &cmd_name[..] {
             b"EXPIRE" => Ok(Expire::new(key, ExpireType::Seconds(expire_at))),
             b"PEXPIRE" => Ok(Expire::new(key, ExpireType::Milliseconds(expire_at))),
-            _ => Err(anyhow!("wrong command 'expire'"))
+            _ => Err(anyhow!("wrong command 'expire'")),
         }
     }
 
@@ -42,14 +39,13 @@ impl Expire {
         match &self.expire_at {
             ExpireType::Seconds(secs) => {
                 if *secs > 0 {
-                    return Some(Instant::now() + Duration::from_secs(*secs as u64))
+                    return Some(Instant::now() + Duration::from_secs(*secs as u64));
                 }
             }
             ExpireType::Milliseconds(ms) => {
                 if *ms > 0 {
-                    return Some(Instant::now() + Duration::from_millis(*ms as u64))
+                    return Some(Instant::now() + Duration::from_millis(*ms as u64));
                 }
-
             }
         }
         None
@@ -57,7 +53,6 @@ impl Expire {
 }
 
 impl CommandExecute for Expire {
-
     fn execute(self, ctx: &Context) -> Frame {
         let expire_at = self.expires_at_direct();
         let result = ctx.db().expire(&self.key, expire_at);

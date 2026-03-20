@@ -30,7 +30,7 @@ impl CommandExecute for Publish {
     fn execute(self, ctx: &Context) -> Frame {
         match ctx.pub_sub().publish(&self.channel, self.message) {
             Ok(cnt) => Frame::Integer(cnt as i64),
-            Err(err) => Frame::Error(err.to_string())
+            Err(err) => Frame::Error(Bytes::from(err.to_string()))
         }
     }
 }
