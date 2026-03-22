@@ -7,7 +7,7 @@ use bytes::Bytes;
 pub struct Ping {
     pub msg: Option<String>,
 }
-const PONG: &str = "PONG";
+
 
 impl Ping {
 

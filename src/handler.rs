@@ -4,17 +4,19 @@ use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::{StreamExt, StreamMap};
+#[cfg(debug_assertions)]
 use tracing::{error, info};
 
 use crate::command::Command;
 use crate::connection::Connection;
 use crate::context::Context;
-use crate::frame;
 use crate::frame::Frame;
 
 /// 处理一个客户端连接的完整生命周期
 pub async fn handle_connection(socket: TcpStream, context: Arc<Context>) -> Result<()> {
+    #[cfg(debug_assertions)]
     let peer_addr = socket.peer_addr()?;
+    #[cfg(debug_assertions)]
     info!("Client connected: {}", peer_addr);
 
     let mut conn = Connection::new(socket);
@@ -54,6 +56,7 @@ pub async fn handle_connection(socket: TcpStream, context: Arc<Context>) -> Resu
         conn.write_and_flush().await?;
     }
 
+    #[cfg(debug_assertions)]
     info!("Client disconnected: {}", peer_addr);
     Ok(())
 }
@@ -97,6 +100,7 @@ async fn handle_subscribe(
                     }
                     Ok(None) => break,
                     Err(err) => {
+                        #[cfg(debug_assertions)]
                         error!("connection error in subscribe mode: {}", err);
                         break;
                     }

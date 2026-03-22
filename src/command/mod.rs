@@ -15,6 +15,7 @@ use crate::frame::Frame;
 use crate::context::Context;
 use anyhow::Result;
 use bytes::Bytes;
+#[cfg(debug_assertions)]
 use tracing::info;
 // 导出解析辅助函数，供各个命令模块使用
 pub(crate) use parse::{extract_bytes, extract_i64, extract_string};
@@ -81,6 +82,7 @@ impl Command {
             b"UNSUBSCRIBE" => Ok(Command::Unsubscribe(unsubscribe::Unsubscribe::parse(&arg)?)),
             _ => {
                 let cmd_name_string = str::from_utf8(cmd_name)?;
+                #[cfg(debug_assertions)]
                 info!("unknown command: {}", cmd_name_string);
                 Ok(Command::Unknown(cmd_name_string.to_string()))
             }
