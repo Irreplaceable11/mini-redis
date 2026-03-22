@@ -32,11 +32,11 @@ pub struct Db {
     next_shard_index: AtomicUsize,
 }
 
-const CLEANUP_BATCH_SIZE: usize = 64;
+const CLEANUP_BATCH_SIZE: usize = 256;
 
 impl Db {
     pub fn new() -> Db {
-        let shard_count = 1024;
+        let shard_count = 2048;
         let mut shards = Vec::with_capacity(shard_count);
         for _ in 0..shard_count {
             shards.push(DashMap::new());
