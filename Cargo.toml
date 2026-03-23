@@ -21,20 +21,21 @@ bytes = "1"
 memchr = "2"
 # 数字转字节
 itoa = "1.0"
+atoi = "2.0.0"
+
 #redis glob风格匹配
 fast-glob = "1.0.1"
 # 线程安全的map, 类似java的ConcurrentHashMap 采用分段锁
 dashmap = "6.1.0"
 ahash = "0.8.12"
-papaya = "0.2"
 
 
 tikv-jemallocator = "0.6"
 num_cpus = "1.16"
 
-core_affinity = "0.8.3"
 
 [profile.release]
 opt-level = 3
 lto = "thin"       # 链接时优化
 codegen-units = 1  # 更好的优化，编译慢但运行快
+
