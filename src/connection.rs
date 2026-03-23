@@ -1,6 +1,7 @@
 use crate::frame::Frame;
 use anyhow::Result;
-use bytes::{Buf, BytesMut};
+use atoi::atoi;
+use bytes::{Buf, Bytes, BytesMut};
 use memchr::memmem;
 use std::io::Cursor;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -40,13 +41,13 @@ impl Connection {
             }
         }
     }
-    
+
     pub fn encode_to_buffer(&mut self, frame: &Frame) -> Result<()> {
         frame.encode(&mut self.write_buffer);
         Ok(())
     }
 
-    pub async fn write_and_flush(&mut self) -> Result<()>  {
+    pub async fn write_and_flush(&mut self) -> Result<()> {
         self.stream.write_all(&self.write_buffer).await?;
         self.write_buffer.clear();
         Ok(())
@@ -79,11 +80,9 @@ impl Connection {
             Err(e) => return Err(e),
         };
         // 第二阶段：从 buffer 中切出这段数据，做真正的解析
-        let mut frame_buf = self.buffer.split_to(len);
-        Self::parse_frame(&mut frame_buf).map(Some)
-
+        let mut frame_buf = self.buffer.split_to(len).freeze();
+        Self::parse_frame_bytes(&mut frame_buf, &mut 0).map(Some)
     }
-
 
     fn check_frame_complete(&self) -> Result<Option<usize>> {
         let mut cursor = Cursor::new(&self.buffer[..]);
@@ -176,8 +175,44 @@ impl Connection {
         }
     }
 
-    // ==================== 第二阶段：真正解析（BytesMut，消费式，零拷贝） ====================
-    // 此时帧数据已经通过 split_to 切出来了，可以放心地消费
+    fn parse_frame_bytes(src: &Bytes, pos: &mut usize) -> Result<Frame> {
+        let type_byte = src[*pos];
+        *pos += 1;
+        match type_byte {
+            b'$' => Self::parse_bulk_string_bytes(src, pos),
+            b'*' => Self::parse_array_bytes(src, pos),
+            _ => Err(anyhow::anyhow!("Unexpected frame type: {}", type_byte)),
+        }
+    }
+
+    fn parse_array_bytes(src: &Bytes, pos: &mut usize) -> Result<Frame> {
+        let remaining = &src[*pos..];
+        let crlf_pos = Self::find_crlf(remaining).ok_or_else(|| anyhow::anyhow!("Incomplete"))?;
+        let length = atoi::<usize>(&remaining[..crlf_pos - 2])
+            .ok_or_else(|| anyhow::anyhow!("parse error"))?;
+        *pos += crlf_pos;
+        let mut frames = Vec::with_capacity(length);
+        for _ in 0..length {
+            frames.push(Self::parse_frame_bytes(src, pos)?);
+        }
+        Ok(Frame::Array(frames))
+    }
+
+    fn parse_bulk_string_bytes(src: &Bytes, pos: &mut usize) -> Result<Frame> {
+        let remaining = &src[*pos..];
+        let crlf_pos = Self::find_crlf(remaining).ok_or_else(|| anyhow::anyhow!("Incomplete"))?;
+
+        // 直接从 remaining 里取长度数字（去掉 \r\n）
+        let data_len = atoi::<usize>(&remaining[..crlf_pos - 2])
+            .ok_or_else(|| anyhow::anyhow!("Incomplete"))?;
+        *pos += crlf_pos; // 跳过长度行
+
+        // 零拷贝切出数据体
+        let start = *pos;
+        let end = start + data_len;
+        *pos = end + 2; // 跳过数据 + \r\n
+        Ok(Frame::BulkString(src.slice(start..end)))
+    }
 
     /// 从 BytesMut 中解析一个 Frame
     /// BytesMut 的 get_u8() 会消费数据（自动 advance），split_to() 零拷贝切割
@@ -194,8 +229,7 @@ impl Connection {
     /// 解析简单类型：SimpleString / Error / Integer
     fn parse_simple_type(type_byte: u8, src: &mut BytesMut) -> Result<Frame> {
         // 找到 \r\n 的位置
-        let crlf_pos = Self::find_crlf(src)
-            .ok_or_else(|| anyhow::anyhow!("Incomplete"))?;
+        let crlf_pos = Self::find_crlf(src).ok_or_else(|| anyhow::anyhow!("Incomplete"))?;
 
         // split_to 切出这一行（包含 \r\n），src 中剩余后面的数据
         let mut line = src.split_to(crlf_pos);
@@ -213,8 +247,7 @@ impl Connection {
     /// 解析 BulkString，这里是零拷贝的关键！
     fn parse_bulk_string(src: &mut BytesMut) -> Result<Frame> {
         // 读长度行
-        let crlf_pos = Self::find_crlf(src)
-            .ok_or_else(|| anyhow::anyhow!("Incomplete"))?;
+        let crlf_pos = Self::find_crlf(src).ok_or_else(|| anyhow::anyhow!("Incomplete"))?;
         let header = src.split_to(crlf_pos);
         let length = std::str::from_utf8(&header[..header.len() - 2])?.parse::<isize>()?;
 
@@ -235,8 +268,7 @@ impl Connection {
 
     /// 解析数组，递归调用 parse_frame
     fn parse_array(src: &mut BytesMut) -> Result<Frame> {
-        let crlf_pos = Self::find_crlf(src)
-            .ok_or_else(|| anyhow::anyhow!("Incomplete"))?;
+        let crlf_pos = Self::find_crlf(src).ok_or_else(|| anyhow::anyhow!("Incomplete"))?;
         let header = src.split_to(crlf_pos);
         let length = std::str::from_utf8(&header[..header.len() - 2])?.parse::<isize>()?;
 
@@ -251,5 +283,32 @@ impl Connection {
         }
 
         Ok(Frame::Array(frames))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_bulk_string_bytes() {
+        // "$3\r\nSET\r\n" — 类型字节 '$' 在外面消费，pos 从 1 开始
+        let src = Bytes::from("$3\r\nSET\r\n");
+        let mut pos = 1; // 跳过 '$'
+        let frame = Connection::parse_bulk_string_bytes(&src, &mut pos).unwrap();
+        println!("bulk_string: {:?}", frame);
+        println!("pos after parse: {}", pos);
+    }
+
+    #[test]
+    fn test_parse_array_bytes() {
+        // "*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n"
+        let src = Bytes::from("*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n");
+        let mut pos = 0;
+        // parse_array_bytes 需要跳过 '*'，但它内部不消费类型字节
+        // 所以需要从 parse_frame_bytes 入口进
+        let frame = Connection::parse_frame_bytes(&src, &mut pos).unwrap();
+        println!("array: {:?}", frame);
+        println!("pos after parse: {}", pos);
     }
 }

@@ -23,17 +23,10 @@ use tracing_subscriber::{EnvFilter, fmt};
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 fn main() -> Result<()> {
-    let core_ids = core_affinity::get_core_ids().unwrap();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(num_cpus::get())
         .enable_all()
         .build()?;
-    for core_id in core_ids {
-        runtime.block_on(async {
-            let res = core_affinity::set_for_current(core_id);
-            println!("{}", res);
-        })
-    }
     runtime.block_on(async_main())
 }
 
@@ -103,7 +96,9 @@ async fn init_log() {
     .expect("时间格式字符串无效");
     let timer = fmt::time::OffsetTime::new(offset!(+8), timer_format);
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("error")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("error")),
+        )
         .with_timer(timer)
         .init();
 }

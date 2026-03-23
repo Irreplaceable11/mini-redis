@@ -36,7 +36,7 @@ const CLEANUP_BATCH_SIZE: usize = 256;
 
 impl Db {
     pub fn new() -> Db {
-        let shard_count = 2048;
+        let shard_count = 4096;
         let mut shards = Vec::with_capacity(shard_count);
         for _ in 0..shard_count {
             shards.push(DashMap::new());
