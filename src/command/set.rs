@@ -1,12 +1,11 @@
 use std::time::{Duration, Instant};
-use crate::{
-    command::parse::extract_u64,
-    frame::Frame,
-};
+
+use crate::command::parse::extract_u64;
+use crate::frame::Frame;
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 
-use crate::command::{extract_bytes, extract_string, CommandExecute};
+use crate::command::{extract_bytes, CommandExecute};
 use crate::context::Context;
 
 pub struct Set {
@@ -25,6 +24,22 @@ pub enum Expiration {
     Seconds(u64),
     Milliseconds(u64),
 }
+
+/// 在 &[u8] 上做 ASCII 大小写无关比较，避免 to_string + to_uppercase 的堆分配
+#[inline]
+fn bytes_eq_ignore_ascii_case(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.eq_ignore_ascii_case(y))
+}
+
+/// 从 Frame 中提取原始字节切片引用，不做任何拷贝
+#[inline]
+fn extract_bytes_ref(frame: &Frame) -> Result<&[u8]> {
+    match frame {
+        Frame::BulkString(bytes) => Ok(bytes),
+        _ => Err(anyhow!("ERR expect BulkString")),
+    }
+}
+
 impl Set {
     pub fn new(
         key: Bytes,
@@ -48,58 +63,55 @@ impl Set {
         }
 
         let key = extract_bytes(&args[0])?;
-
         let value = extract_bytes(&args[1])?;
-
-        // 循环提取参数
 
         let mut ttl = None;
         let mut nx = false;
         let mut xx = false;
-        // 从2开始排除key value
         let mut idx = 2;
+
         while idx < args.len() {
-            let keyword = extract_string(&args[idx])?.to_uppercase();
-            // EX PX不需要互斥 后者覆盖前者
-            match keyword.as_str() {
-                "EX" => {
-                    if idx + 1 >= args.len() {
-                        return Err(anyhow!("ERR syntax error: option '{}' requires an argument", keyword));
-                    }
-                    let val = extract_u64(&args[idx + 1])?;
-                    ttl = Some(Expiration::Seconds(val));
-                    idx += 2;
-                }
+            let keyword = extract_bytes_ref(&args[idx])?;
 
-                "PX" => {
-                    if idx + 1 >= args.len() {
-                        return Err(anyhow!("ERR syntax error: option '{}' requires an argument", keyword));
-                    }
-                    let val = extract_u64(&args[idx + 1])?;
-                    ttl = Some(Expiration::Milliseconds(val));
-                    idx += 2;
+            if bytes_eq_ignore_ascii_case(keyword, b"EX") {
+                if idx + 1 >= args.len() {
+                    return Err(anyhow!(
+                        "ERR syntax error: option 'EX' requires an argument"
+                    ));
                 }
-
-                "NX" => {
-                    if xx {
-                        return Err(anyhow!("ERR XX and NX options at the same time are not compatible"));
-                    }
-                    nx = true;
-                    idx += 1;
+                let val = extract_u64(&args[idx + 1])?;
+                ttl = Some(Expiration::Seconds(val));
+                idx += 2;
+            } else if bytes_eq_ignore_ascii_case(keyword, b"PX") {
+                if idx + 1 >= args.len() {
+                    return Err(anyhow!(
+                        "ERR syntax error: option 'PX' requires an argument"
+                    ));
                 }
-
-                "XX" => {
-                    if nx {
-                        return Err(anyhow!("ERR XX and NX options at the same time are not compatible"));
-                    }
-                    xx = true;
-                    idx += 1;
+                let val = extract_u64(&args[idx + 1])?;
+                ttl = Some(Expiration::Milliseconds(val));
+                idx += 2;
+            } else if bytes_eq_ignore_ascii_case(keyword, b"NX") {
+                if xx {
+                    return Err(anyhow!(
+                        "ERR XX and NX options at the same time are not compatible"
+                    ));
                 }
-
-                _ => {
-                    // 遇到不认识的关键字
-                    return Err(anyhow!("ERR syntax error: unknown option '{}'", keyword));
+                nx = true;
+                idx += 1;
+            } else if bytes_eq_ignore_ascii_case(keyword, b"XX") {
+                if nx {
+                    return Err(anyhow!(
+                        "ERR XX and NX options at the same time are not compatible"
+                    ));
                 }
+                xx = true;
+                idx += 1;
+            } else {
+                return Err(anyhow!(
+                    "ERR syntax error: unknown option '{}'",
+                    String::from_utf8_lossy(keyword)
+                ));
             }
         }
 
@@ -125,8 +137,7 @@ impl CommandExecute for Set {
         let instant = self.expires_at_direct();
         match ctx.db().set(self.key, self.value, instant, self.nx, self.xx) {
             Some(_) => Frame::SimpleString(Bytes::from_static(b"OK")),
-            None => Frame::Null
+            None => Frame::Null,
         }
-
     }
 }
