@@ -245,6 +245,7 @@ dependencies = [
  "itoa",
  "memchr",
  "num_cpus",
+ "parking_lot",
  "rayon",
  "tikv-jemallocator",
  "time",
