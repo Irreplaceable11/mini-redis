@@ -1,10 +1,10 @@
 use anyhow::Result;
+use mini_redis::db::Db;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::time::{Duration, interval};
 
 use mini_redis::context::Context;
-use mini_redis::db_opt::DbOpt;
 use mini_redis::handler::handle_connection;
 use mini_redis::pubsub::PubSub;
 
@@ -48,7 +48,7 @@ async fn async_main() -> Result<()> {
     #[cfg(not(debug_assertions))]
     eprintln!("mini redis listening on {:?}", listener.local_addr()?);
 
-    let ctx = Arc::new(Context::new(DbOpt::new(), PubSub::new()));
+    let ctx = Arc::new(Context::new(Db::new(), PubSub::new()));
 
     // 启动定期清理过期 key 的后台任务
     let cleanup_ctx = ctx.clone();

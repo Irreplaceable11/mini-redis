@@ -40,7 +40,7 @@ impl Db {
         let shard_count = 2048;
         let mut shards = Vec::with_capacity(shard_count);
         for _ in 0..shard_count {
-            shards.push(DashMap::with_capacity(1600));
+            shards.push(DashMap::with_capacity(2048));
         }
         Db {
             shards,

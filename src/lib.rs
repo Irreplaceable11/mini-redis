@@ -2,7 +2,6 @@
 pub mod command;
 pub mod connection;
 pub mod db;
-pub mod db_opt;
 pub mod frame;
 
 pub mod context;
