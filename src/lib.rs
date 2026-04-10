@@ -3,6 +3,7 @@ pub mod command;
 pub mod connection;
 pub mod db;
 pub mod frame;
+pub mod aof;
 
 pub mod context;
 pub mod handler;
