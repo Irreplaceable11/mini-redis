@@ -33,8 +33,8 @@ impl Ttl {
 }
 
 impl CommandExecute for Ttl {
-    fn execute(self, ctx: &Context) -> Frame {
+    fn execute(self, ctx: &Context) -> (Frame, Option<crate::aof::AofEntry>) {
         let remaining = ctx.db().ttl(&self.key, self.ttl_type == TtlType::Milliseconds);
-        Frame::Integer(remaining)
+        (Frame::Integer(remaining), None)
     }
 }

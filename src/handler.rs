@@ -4,7 +4,6 @@ use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::{StreamExt, StreamMap};
-#[cfg(debug_assertions)]
 use tracing::{error, info};
 
 use crate::command::Command;
@@ -14,9 +13,7 @@ use crate::frame::Frame;
 
 /// 处理一个客户端连接的完整生命周期
 pub async fn handle_connection(socket: TcpStream, context: Arc<Context>) -> Result<()> {
-    #[cfg(debug_assertions)]
     let peer_addr = socket.peer_addr()?;
-    #[cfg(debug_assertions)]
     info!("Client connected: {}", peer_addr);
 
     let mut conn = Connection::new(socket);
@@ -30,7 +27,7 @@ pub async fn handle_connection(socket: TcpStream, context: Arc<Context>) -> Resu
         while let Some(frame) = conn.try_read_frame()? {
             frames.push(frame);
         }
-
+        let mut aof_entry_vec = Vec::with_capacity(frames.len());
         for ele in frames {
             match Command::from_frame(ele) {
                 Ok(cmd) => {
@@ -45,7 +42,10 @@ pub async fn handle_connection(socket: TcpStream, context: Arc<Context>) -> Resu
                         conn.encode_to_buffer(&resp)?;
                         continue;
                     }
-                    let resp = Command::execute(cmd, &context);
+                    let (resp, aof_entry) = Command::execute(cmd, &context);
+                    if let Some(entry) = aof_entry {
+                        aof_entry_vec.push(entry);
+                    }
                     conn.encode_to_buffer(&resp)?;
                 }
                 Err(err) => {
@@ -53,10 +53,10 @@ pub async fn handle_connection(socket: TcpStream, context: Arc<Context>) -> Resu
                 }
             }
         }
+        context.aof_send_batch(aof_entry_vec).await?;
         conn.write_and_flush().await?;
     }
 
-    #[cfg(debug_assertions)]
     info!("Client disconnected: {}", peer_addr);
     Ok(())
 }
@@ -100,7 +100,6 @@ async fn handle_subscribe(
                     }
                     Ok(None) => break,
                     Err(err) => {
-                        #[cfg(debug_assertions)]
                         error!("connection error in subscribe mode: {}", err);
                         break;
                     }
@@ -132,7 +131,7 @@ async fn handle_subscribe_command(
             }
         }
         Command::Ping(_) => {
-            let resp = Command::execute(command, ctx);
+            let (resp, _) = Command::execute(command, ctx);
             conn.encode_to_buffer(&resp)?;
             conn.write_and_flush().await?;
         }

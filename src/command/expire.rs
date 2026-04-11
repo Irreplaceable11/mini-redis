@@ -1,3 +1,4 @@
+use crate::aof::AofEntry;
 use crate::frame::Frame;
 use std::time::{Duration, Instant};
 
@@ -53,9 +54,14 @@ impl Expire {
 }
 
 impl CommandExecute for Expire {
-    fn execute(self, ctx: &Context) -> Frame {
+    fn execute(self, ctx: &Context) -> (Frame, Option<AofEntry>) {
         let expire_at = self.expires_at_direct();
         let result = ctx.db().expire(&self.key, expire_at);
-        Frame::Integer(result as i64)
+        if result > 0 {
+            let entry = AofEntry::from_expire(self.key, expire_at);
+            (Frame::Integer(result as i64), Some(entry))
+        } else {
+            (Frame::Integer(0), None)
+        }
     }
 }

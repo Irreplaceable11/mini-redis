@@ -27,10 +27,10 @@ impl Publish {
 }
 
 impl CommandExecute for Publish {
-    fn execute(self, ctx: &Context) -> Frame {
+    fn execute(self, ctx: &Context) -> (Frame, Option<crate::aof::AofEntry>) {
         match ctx.pub_sub().publish(&self.channel, self.message) {
-            Ok(cnt) => Frame::Integer(cnt as i64),
-            Err(err) => Frame::Error(Bytes::from(err.to_string()))
+            Ok(cnt) => (Frame::Integer(cnt as i64), None),
+            Err(err) => (Frame::Error(Bytes::from(err.to_string())), None),
         }
     }
 }

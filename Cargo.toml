@@ -22,12 +22,15 @@ memchr = "2"
 # 数字转字节
 itoa = "1.0"
 atoi = "2.0.0"
+# 时间处理
+chrono = "0.4"
 
 #redis glob风格匹配
 fast-glob = "1.0.1"
 # 线程安全的map, 类似java的ConcurrentHashMap 采用分段锁
 dashmap = "6.1.0"
 ahash = "0.8.12"
+smallvec = "1"
 
 serde = { version = "1.0", features = ["derive"] }
 bincode = "1.3.3"

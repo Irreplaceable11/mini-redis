@@ -2,6 +2,18 @@
 
 A high-performance Redis server implementation written in Rust for learning purposes. Implements the RESP (Redis Serialization Protocol) and supports core Redis commands with a focus on concurrency, zero-copy parsing, and efficient memory management.
 
+## Features
+
+- Full RESP protocol parsing (Simple Strings, Errors, Integers, Bulk Strings, Arrays)
+- Multi-threaded async runtime with tokio work-stealing scheduler
+- 2048-shard partitioned storage using `DashMap` for fine-grained concurrent access
+- Zero-copy frame parsing with `bytes::BytesMut` split/freeze
+- Batch read + batch write optimization for pipeline mode
+- Background TTL cleanup with round-robin shard scanning
+- Pub/Sub messaging via `tokio::sync::broadcast` channels
+- AOF (Append-Only File) persistence with configurable fsync policies
+- jemalloc allocator for reduced memory fragmentation
+
 ## Architecture
 
 ```
@@ -25,20 +37,13 @@ A high-performance Redis server implementation written in Rust for learning purp
         ▼            ▼            ▼
    ┌──────────────────────────────────────┐
    │         Context (Arc shared)         │
-   │  ┌──────────┐    ┌───────────────┐   │
-   │  │    Db    │    │    PubSub     │   │
-   │  │ 256-shard│    │  (broadcast)  │   │
-   │  │ RwLock   │    │  DashMap      │   │
-   │  └──────────┘    └───────────────┘   │
+   │  ┌──────────┐  ┌────────┐  ┌─────┐  │
+   │  │    Db    │  │ PubSub │  │ AOF │  │
+   │  │2048-shard│  │DashMap │  │Write│  │
+   │  │ DashMap  │  │broadcast│ │ Log │  │
+   │  └──────────┘  └────────┘  └─────┘  │
    └──────────────────────────────────────┘
 ```
-
-- Multi-threaded async runtime (tokio) with per-connection task spawning
-- 256-shard partitioned storage with `parking_lot::RwLock` for fine-grained locking
-- Zero-copy RESP frame parsing using `bytes::BytesMut` split/freeze
-- Batch read + batch write optimization for pipeline mode
-- Background TTL cleanup with round-robin shard scanning
-- Pub/Sub via `tokio::sync::broadcast` channels managed by `DashMap`
 
 ## Supported Commands
 
@@ -58,6 +63,16 @@ A high-performance Redis server implementation written in Rust for learning purp
 | `SUBSCRIBE channel [channel ...]` | Subscribe to channels |
 | `UNSUBSCRIBE channel [channel ...]` | Unsubscribe from channels |
 
+## Persistence
+
+AOF (Append-Only File) support with three fsync policies:
+
+- `Always` — fsync after every write batch (safest, slowest)
+- `EverySec` — fsync once per second (good balance)
+- `No` — let the OS decide when to flush (fastest, least safe)
+
+On startup, the AOF file is replayed to restore state. Expired keys are skipped during replay.
+
 ## Tech Stack
 
 | Component | Choice | Why |
@@ -65,87 +80,81 @@ A high-performance Redis server implementation written in Rust for learning purp
 | Async Runtime | `tokio` (multi-thread) | Industry standard, work-stealing scheduler |
 | Byte Buffers | `bytes` | Zero-copy `BytesMut`/`Bytes` for RESP parsing |
 | Fast Search | `memchr` | SIMD-accelerated `\r\n` scanning |
-| Number Format | `itoa` | Heap-free integer-to-ASCII conversion |
-| Locking | `parking_lot::RwLock` | Faster than std RwLock, no poisoning |
-| Concurrent Map | `dashmap` | Lock-sharded map for Pub/Sub channels |
+| Number Format | `itoa` / `atoi` | Heap-free integer-to-ASCII conversion |
+| Concurrent Map | `dashmap` + `ahash` | Lock-sharded map for DB and Pub/Sub |
 | Glob Matching | `fast-glob` | Redis-style pattern matching for KEYS |
 | Parallel Scan | `rayon` | Parallel iterator for KEYS across shards |
+| Serialization | `bincode` + `serde` | Fast binary encoding for AOF entries |
+| Allocator | `tikv-jemallocator` | Reduced fragmentation under concurrent load |
 | Error Handling | `anyhow` | Ergonomic error propagation |
 | Logging | `tracing` + `tracing-subscriber` | Structured async-aware logging |
 
 ## Benchmark
 
-Test environment: WSL2 Ubuntu 24.04 on Windows 11, using `redis-benchmark`.
+Test environment: WSL2 Ubuntu 24.04 on Windows 11, using `redis-benchmark`.  
+AOF persistence disabled during benchmarks to measure pure in-memory throughput.
 
-### Single-thread vs Multi-thread (50 clients, normal mode)
+### 50 clients, normal mode
 
 ```
 redis-benchmark -h 127.0.0.1 -p 6377 -c 50 -n 100000 -t set,get
 ```
 
-| Mode | GET | SET |
-|------|-----|-----|
-| Single-thread | 89,766/s | 91,157/s |
-| Multi-thread | 103,305/s | 100,200/s |
-| Improvement | +15% | +10% |
+| Command | Throughput |
+|---------|-----------|
+| SET | 132,450/s |
+| GET | 117,370/s |
 
-### Single-thread vs Multi-thread (50 clients, pipeline 16)
+### 50 clients, pipeline 16
 
 ```
 redis-benchmark -h 127.0.0.1 -p 6377 -c 50 -n 100000 -t set,get -P 16
 ```
 
-| Mode | GET | SET |
-|------|-----|-----|
-| Single-thread | 943,396/s | 934,579/s |
-| Multi-thread | 1,449,275/s | 970,873/s |
-| Improvement | +54% | +4% |
+| Command | Throughput |
+|---------|-----------|
+| SET | 1,492,537/s |
+| GET | 1,886,792/s |
 
-### High Concurrency (500 clients, normal mode)
+### 500 clients, normal mode
 
 ```
 redis-benchmark -h 127.0.0.1 -p 6377 -c 500 -n 500000 -t set,get
 ```
 
-| Mode | GET | SET |
-|------|-----|-----|
-| Single-thread | 97,276/s | 76,722/s |
-| Multi-thread | 104,101/s | 99,324/s |
-| Improvement | +7% | +29% |
+| Command | Throughput |
+|---------|-----------|
+| SET | 159,438/s |
+| GET | 178,635/s |
 
-### High Concurrency (500 clients, pipeline 16)
+### 500 clients, pipeline 16
 
 ```
 redis-benchmark -h 127.0.0.1 -p 6377 -c 500 -n 1000000 -t set,get -P 16
 ```
 
-| Mode | GET | SET |
-|------|-----|-----|
-| Single-thread | 979,431/s | 801,282/s |
-| Multi-thread | 1,297,016/s | 1,022,494/s |
-| Improvement | +32% | +28% |
+| Command | Throughput |
+|---------|-----------|
+| SET | 2,145,922/s |
+| GET | 2,109,704/s |
 
-### High Concurrency (500 clients, pipeline 64)
+### 500 clients, pipeline 64
 
 ```
 redis-benchmark -h 127.0.0.1 -p 6377 -c 500 -n 1000000 -t set,get -P 64
 ```
 
-| Mode | GET | SET |
-|------|-----|-----|
-| Single-thread | 1,552,795/s | 1,230,012/s |
-| Multi-thread | 3,164,556/s | 952,381/s |
-| Improvement | +104% | -23% ⚠️ |
-
-> Note: Under extreme write pressure (500 clients × pipeline 64), multi-thread SET performance degrades due to write lock contention. The `RwLock` write lock is exclusive — all other threads must wait. In contrast, GET scales well because read locks allow concurrent access.
+| Command | Throughput |
+|---------|-----------|
+| SET | 3,278,688/s |
+| GET | 5,494,505/s |
 
 ### Key Takeaways
 
-- Single-thread achieves ~90K QPS for normal GET/SET, comparable to official Redis
-- Pipeline mode reaches 930K+ QPS even on a single thread
-- Multi-thread GET scales well under all conditions (read locks are concurrent)
-- Multi-thread SET hits write lock contention at extreme pipeline depths
-- The 256-shard design with `parking_lot::RwLock` provides good performance up to moderate concurrency
+- Normal mode achieves ~130K+ QPS for SET/GET with 50 clients
+- Pipeline 16 pushes throughput to 1.5M~2.1M QPS
+- At pipeline 64 with 500 clients, GET reaches 5.5M QPS, SET reaches 3.3M QPS
+- The 2048-shard DashMap design scales well under high concurrency
 
 ## Quick Start
 
@@ -164,6 +173,10 @@ PONG
 OK
 > GET hello
 "world"
+> SET session abc EX 60
+OK
+> TTL session
+(integer) 59
 ```
 
 ## License

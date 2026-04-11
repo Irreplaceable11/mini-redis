@@ -20,10 +20,10 @@ impl Get {
 }
 
 impl CommandExecute for Get {
-    fn execute(self, ctx: &Context) -> Frame {
+    fn execute(self, ctx: &Context) -> (Frame, Option<crate::aof::AofEntry>) {
         match ctx.db().get(&self.key) {
-            Some(value) => Frame::BulkString(value),
-            None => Frame::Null,
+            Some(value) => (Frame::BulkString(value), None),
+            None => (Frame::Null, None),
         }
     }
 }

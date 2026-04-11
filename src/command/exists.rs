@@ -26,8 +26,8 @@ impl Exists {
 }
 
 impl CommandExecute for Exists {
-    fn execute(self, ctx: &Context) -> Frame {
+    fn execute(self, ctx: &Context) -> (Frame, Option<crate::aof::AofEntry>) {
         let res = ctx.db().exists(self.keys);
-        Frame::Integer(res as i64)
+        (Frame::Integer(res as i64), None)
     }
 }

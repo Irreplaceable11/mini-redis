@@ -38,10 +38,10 @@ impl Ping {
 }
 
 impl CommandExecute for Ping {
-    fn execute(self, _ctx: &Context) -> Frame {
+    fn execute(self, _ctx: &Context) -> (Frame, Option<crate::aof::AofEntry>) {
          match self.msg {
-            None => Frame::SimpleString(Bytes::from_static(b"PONG")),
-            Some(msg) => Frame::BulkString(msg.into())
+            None => (Frame::SimpleString(Bytes::from_static(b"PONG")), None),
+            Some(msg) => (Frame::BulkString(msg.into()), None),
         }
     }
 }

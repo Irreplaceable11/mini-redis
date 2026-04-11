@@ -5,6 +5,7 @@ use crate::frame::Frame;
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 
+use crate::aof::AofEntry;
 use crate::command::{extract_bytes, CommandExecute};
 use crate::context::Context;
 
@@ -41,13 +42,7 @@ fn extract_bytes_ref(frame: &Frame) -> Result<&[u8]> {
 }
 
 impl Set {
-    pub fn new(
-        key: Bytes,
-        value: Bytes,
-        ttl: Option<Expiration>,
-        nx: bool,
-        xx: bool,
-    ) -> Self {
+    pub fn new(key: Bytes, value: Bytes, ttl: Option<Expiration>, nx: bool, xx: bool) -> Self {
         Set {
             key,
             value,
@@ -133,11 +128,17 @@ impl Set {
 }
 
 impl CommandExecute for Set {
-    fn execute(self, ctx: &Context) -> Frame {
+    fn execute(self, ctx: &Context) -> (Frame, Option<AofEntry>) {
         let instant = self.expires_at_direct();
-        match ctx.db().set(self.key, self.value, instant, self.nx, self.xx) {
-            Some(_) => Frame::SimpleString(Bytes::from_static(b"OK")),
-            None => Frame::Null,
+        match ctx
+            .db()
+            .set(self.key.clone(), self.value.clone(), instant, self.nx, self.xx)
+        {
+            Some(_) => {
+                let entry = AofEntry::from_set(self.key, self.value, instant, self.nx, self.xx);
+                (Frame::SimpleString(Bytes::from_static(b"OK")), Some(entry))
+            }
+            None => (Frame::Null, None),
         }
     }
 }

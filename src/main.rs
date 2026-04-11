@@ -1,23 +1,19 @@
 use anyhow::Result;
+use mini_redis::aof::{Aof, AofEntry, FsyncPolicy};
 use mini_redis::db::Db;
+use std::env;
 use std::sync::Arc;
+use time::format_description;
+use time::macros::offset;
 use tokio::net::TcpListener;
+use tokio::sync::mpsc::Receiver;
 use tokio::time::{Duration, interval};
+use tracing::{info, info_span, Instrument};
+use tracing_subscriber::{EnvFilter, fmt};
 
 use mini_redis::context::Context;
 use mini_redis::handler::handle_connection;
 use mini_redis::pubsub::PubSub;
-
-#[cfg(debug_assertions)]
-use time::format_description;
-#[cfg(debug_assertions)]
-use time::macros::offset;
-#[cfg(debug_assertions)]
-use tracing::Instrument;
-#[cfg(debug_assertions)]
-use tracing::{info, info_span};
-#[cfg(debug_assertions)]
-use tracing_subscriber::{EnvFilter, fmt};
 
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -31,24 +27,17 @@ fn main() -> Result<()> {
 }
 
 async fn async_main() -> Result<()> {
-    //编译 RUSTFLAGS="-C target-cpu=native" cargo build --release
-    //这样编译器会针对你本机 CPU 的指令集做额外优化
-    // redis-benchmark -h 127.0.0.1 -p 6377 -c 500 -n 1000000 -t set,get -P 64
-    // redis基准测试 pipeline模式 get qps:6097561/s set qps:4273504/s (wsl2 ubuntu 24.04)
-    // redis-benchmark -h 127.0.0.1 -p 6377 -c 50 -n 100000 -t set,get
-    // 普通模式 get qps:134770/s  set qps: 135501/s(wsl2 ubuntu 24.04)
-
-    #[cfg(debug_assertions)]
     init_log().await;
 
     let listener = TcpListener::bind(("0.0.0.0", 6377)).await?;
-
-    #[cfg(debug_assertions)]
     info!("mini redis listening on {:?}", listener.local_addr()?);
-    #[cfg(not(debug_assertions))]
-    eprintln!("mini redis listening on {:?}", listener.local_addr()?);
 
-    let ctx = Arc::new(Context::new(Db::new(), PubSub::new()));
+    let (aof, rx) = init_aof().await?;
+    let sender_clone = aof.sender.clone();
+    let ctx = Arc::new(Context::new(Db::new(), PubSub::new(), Some(sender_clone)));
+
+    aof.replay(ctx.clone())?;
+    tokio::spawn(aof.start_aof_writer(rx));
 
     // 启动定期清理过期 key 的后台任务
     let cleanup_ctx = ctx.clone();
@@ -65,30 +54,18 @@ async fn async_main() -> Result<()> {
         socket.set_nodelay(true)?;
         let conn_ctx = ctx.clone();
 
-        #[cfg(debug_assertions)]
-        {
-            let span = info_span!("handle_connection", client_addr = %addr);
-            tokio::spawn(
-                async move {
-                    if let Err(e) = handle_connection(socket, conn_ctx).await {
-                        info!("connection error: {}", e);
-                    }
+        let span = info_span!("handle_connection", client_addr = %addr);
+        tokio::spawn(
+            async move {
+                if let Err(e) = handle_connection(socket, conn_ctx).await {
+                    info!("connection error: {}", e);
                 }
-                .instrument(span),
-            );
-        }
-
-        #[cfg(not(debug_assertions))]
-        {
-            let _ = addr;
-            tokio::spawn(async move {
-                let _ = handle_connection(socket, conn_ctx).await;
-            });
-        }
+            }
+            .instrument(span),
+        );
     }
 }
 
-#[cfg(debug_assertions)]
 async fn init_log() {
     let timer_format = format_description::parse(
         "[year]-[month padding:zero]-[day padding:zero] [hour]:[minute]:[second]",
@@ -101,4 +78,14 @@ async fn init_log() {
         )
         .with_timer(timer)
         .init();
+}
+
+async fn init_aof() -> Result<(Aof, Receiver<Vec<AofEntry>>)> {
+    let exe_path = env::current_exe()?;
+    let exe_dir = match exe_path.parent() {
+        Some(dir) => dir,
+        None => return Err(anyhow::anyhow!("无法获取可执行文件的目录")),
+    };
+    let (aof, rx) = Aof::new(FsyncPolicy::EverySec, exe_dir.join("listendb.aof"))?;
+    Ok((aof, rx))
 }

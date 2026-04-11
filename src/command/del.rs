@@ -1,7 +1,8 @@
+use crate::aof::AofEntry;
 use crate::command::{extract_bytes, CommandExecute};
 use crate::context::Context;
 use crate::frame::Frame;
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use bytes::Bytes;
 
 pub struct Del {
@@ -26,8 +27,13 @@ impl Del {
 }
 
 impl CommandExecute for Del {
-    fn execute(self, ctx: &Context) -> Frame {
+    fn execute(self, ctx: &Context) -> (Frame, Option<AofEntry>) {
+        let entry = AofEntry::Del(self.keys.clone());
         let res = ctx.db().del(self.keys);
-        Frame::Integer(res as i64)
+        if res > 0 {
+            (Frame::Integer(res as i64), Some(entry))
+        } else {
+            (Frame::Integer(0), None)
+        }
     }
 }

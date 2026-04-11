@@ -11,17 +11,18 @@ pub mod publish;
 pub mod subscribe;
 pub mod unsubscribe;
 
+use crate::aof::AofEntry;
 use crate::frame::Frame;
 use crate::context::Context;
 use anyhow::Result;
 use bytes::Bytes;
-#[cfg(debug_assertions)]
+use smallvec::SmallVec;
 use tracing::info;
 // 导出解析辅助函数，供各个命令模块使用
 pub(crate) use parse::{extract_bytes, extract_i64, extract_string};
 
 pub(crate) trait CommandExecute {
-    fn execute(self, ctx: &Context) -> Frame;
+    fn execute(self, ctx: &Context) -> (Frame, Option<AofEntry>);
 }
 
 
@@ -41,7 +42,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub fn execute(self, ctx: &Context) -> Frame {
+    pub fn execute(self, ctx: &Context) -> (Frame, Option<AofEntry>) {
         match self {
             Command::Ping(cmd) => cmd.execute(ctx),
             Command::Set(cmd) => cmd.execute(ctx),
@@ -51,8 +52,8 @@ impl Command {
             Command::Ttl(cmd) => cmd.execute(ctx),
             Command::Expire(cmd) => cmd.execute(ctx),
             Command::Publish(cmd)  => cmd.execute(ctx),
-            Command::Unknown(cmd) => Frame::Error(Bytes::from(format!("Command failed, unknown command:{:?}", cmd))),
-            _ => Frame::Error(Bytes::from("ERR command not implemented".to_string())),
+            Command::Unknown(cmd) => (Frame::Error(Bytes::from(format!("Command failed, unknown command:{:?}", cmd))), None),
+            _ => (Frame::Error(Bytes::from("ERR command not implemented".to_string())), None),
         }
     }
 }
@@ -82,14 +83,13 @@ impl Command {
             b"UNSUBSCRIBE" => Ok(Command::Unsubscribe(unsubscribe::Unsubscribe::parse(&arg)?)),
             _ => {
                 let cmd_name_string = str::from_utf8(cmd_name)?;
-                #[cfg(debug_assertions)]
                 info!("unknown command: {}", cmd_name_string);
                 Ok(Command::Unknown(cmd_name_string.to_string()))
             }
         }
     }
 
-    fn parse_array(frame: Frame) -> Result<([u8; 16], usize, Vec<Frame>)> {
+    fn parse_array(frame: Frame) -> Result<([u8; 16], usize, SmallVec<[Frame; 5]>)> {
         match frame {
             Frame::Array(arr) => {
                 if arr.is_empty() {
@@ -114,7 +114,7 @@ impl Command {
                 for i in 0..len {
                     buf[i] = bytes[i].to_ascii_uppercase();
                 }
-                Ok((buf, len, iter.collect::<Vec<_>>()))  // 返回命令名和剩余参数
+                Ok((buf, len, iter.collect::<SmallVec<[Frame; 5]>>()))
             }
             _ => Err(anyhow::anyhow!("ERR protocol error: expected array"))
         }
