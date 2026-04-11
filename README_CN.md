@@ -2,6 +2,18 @@
 
 一个用 Rust 编写的高性能 Redis 服务器实现，用于学习 Rust 异步编程、并发设计和网络协议。实现了 RESP（Redis 序列化协议），支持核心 Redis 命令，注重零拷贝解析和高效内存管理。
 
+## 功能特性
+
+- 完整的 RESP 协议解析（Simple Strings、Errors、Integers、Bulk Strings、Arrays）
+- 基于 tokio work-stealing 调度器的多线程异步运行时
+- 2048 分片 `DashMap` 存储，细粒度并发访问
+- 基于 `bytes::BytesMut` split/freeze 的零拷贝帧解析
+- 批量读取 + 批量写入优化，提升 pipeline 模式吞吐量
+- 后台 TTL 清理任务，轮询式分片扫描
+- 基于 `tokio::sync::broadcast` 通道的发布/订阅消息系统
+- AOF（Append-Only File）持久化，支持可配置的 fsync 策略
+- jemalloc 内存分配器，减少内存碎片
+
 ## 架构设计
 
 ```
@@ -25,20 +37,13 @@
         ▼            ▼            ▼
    ┌──────────────────────────────────────┐
    │         Context (Arc 共享)           │
-   │  ┌──────────┐    ┌───────────────┐   │
-   │  │    Db    │    │    PubSub     │   │
-   │  │ 256分片  │    │  (broadcast)  │   │
-   │  │ RwLock   │    │  DashMap      │   │
-   │  └──────────┘    └───────────────┘   │
+   │  ┌──────────┐  ┌────────┐  ┌─────┐  │
+   │  │    Db    │  │ PubSub │  │ AOF │  │
+   │  │2048 分片 │  │DashMap │  │写入 │  │
+   │  │ DashMap  │  │broadcast│ │日志 │  │
+   │  └──────────┘  └────────┘  └─────┘  │
    └──────────────────────────────────────┘
 ```
-
-- 多线程异步运行时（tokio），每个连接独立 task
-- 256 分片存储，使用 `parking_lot::RwLock` 实现细粒度锁
-- 基于 `bytes::BytesMut` 的零拷贝 RESP 帧解析（split/freeze）
-- 批量读取 + 批量写入优化，提升 pipeline 模式吞吐量
-- 后台 TTL 清理任务，轮询式分片扫描
-- 发布/订阅基于 `tokio::sync::broadcast` 通道，由 `DashMap` 管理
 
 ## 支持的命令
 
@@ -58,6 +63,16 @@
 | `SUBSCRIBE channel [channel ...]` | 订阅频道 |
 | `UNSUBSCRIBE channel [channel ...]` | 取消订阅频道 |
 
+## 持久化
+
+支持 AOF（Append-Only File）持久化，提供三种 fsync 策略：
+
+- `Always` — 每批写入后立即 fsync（最安全，最慢）
+- `EverySec` — 每秒 fsync 一次（安全与性能的平衡）
+- `No` — 由操作系统决定何时刷盘（最快，最不安全）
+
+启动时自动重放 AOF 文件恢复数据，已过期的 key 在重放时会被跳过。
+
 ## 技术栈
 
 | 组件 | 选型 | 理由 |
@@ -65,87 +80,81 @@
 | 异步运行时 | `tokio`（多线程模式） | 业界标准，work-stealing 调度器 |
 | 字节缓冲 | `bytes` | 零拷贝的 `BytesMut`/`Bytes`，用于 RESP 解析 |
 | 快速搜索 | `memchr` | SIMD 加速的 `\r\n` 扫描 |
-| 数字格式化 | `itoa` | 无堆分配的整数转 ASCII |
-| 锁 | `parking_lot::RwLock` | 比标准库 RwLock 更快，无 poisoning |
-| 并发 Map | `dashmap` | 分段锁 Map，用于 Pub/Sub 频道管理 |
+| 数字格式化 | `itoa` / `atoi` | 无堆分配的整数转 ASCII |
+| 并发 Map | `dashmap` + `ahash` | 分段锁 Map，用于 DB 和 Pub/Sub |
 | Glob 匹配 | `fast-glob` | Redis 风格的模式匹配，用于 KEYS 命令 |
 | 并行扫描 | `rayon` | 并行迭代器，用于 KEYS 跨分片扫描 |
+| 序列化 | `bincode` + `serde` | 高速二进制编码，用于 AOF 条目 |
+| 内存分配器 | `tikv-jemallocator` | 减少并发负载下的内存碎片 |
 | 错误处理 | `anyhow` | 简洁的错误传播 |
 | 日志 | `tracing` + `tracing-subscriber` | 结构化异步日志 |
 
 ## 性能测试
 
 测试环境：WSL2 Ubuntu 24.04（Windows 11 宿主机），使用 `redis-benchmark`。
+压测期间关闭 AOF 持久化，测量纯内存吞吐量。
 
-### 单线程 vs 多线程（50 并发，普通模式）
+### 50 并发，普通模式
 
 ```
 redis-benchmark -h 127.0.0.1 -p 6377 -c 50 -n 100000 -t set,get
 ```
 
-| 模式 | GET | SET |
-|------|-----|-----|
-| 单线程 | 89,766/s | 91,157/s |
-| 多线程 | 103,305/s | 100,200/s |
-| 提升 | +15% | +10% |
+| 命令 | 吞吐量 |
+|------|--------|
+| SET | 132,450/s |
+| GET | 117,370/s |
 
-### 单线程 vs 多线程（50 并发，pipeline 16）
+### 50 并发，pipeline 16
 
 ```
 redis-benchmark -h 127.0.0.1 -p 6377 -c 50 -n 100000 -t set,get -P 16
 ```
 
-| 模式 | GET | SET |
-|------|-----|-----|
-| 单线程 | 943,396/s | 934,579/s |
-| 多线程 | 1,449,275/s | 970,873/s |
-| 提升 | +54% | +4% |
+| 命令 | 吞吐量 |
+|------|--------|
+| SET | 1,492,537/s |
+| GET | 1,886,792/s |
 
-### 高并发（500 并发，普通模式）
+### 500 并发，普通模式
 
 ```
 redis-benchmark -h 127.0.0.1 -p 6377 -c 500 -n 500000 -t set,get
 ```
 
-| 模式 | GET | SET |
-|------|-----|-----|
-| 单线程 | 97,276/s | 76,722/s |
-| 多线程 | 104,101/s | 99,324/s |
-| 提升 | +7% | +29% |
+| 命令 | 吞吐量 |
+|------|--------|
+| SET | 159,438/s |
+| GET | 178,635/s |
 
-### 高并发（500 并发，pipeline 16）
+### 500 并发，pipeline 16
 
 ```
 redis-benchmark -h 127.0.0.1 -p 6377 -c 500 -n 1000000 -t set,get -P 16
 ```
 
-| 模式 | GET | SET |
-|------|-----|-----|
-| 单线程 | 979,431/s | 801,282/s |
-| 多线程 | 1,297,016/s | 1,022,494/s |
-| 提升 | +32% | +28% |
+| 命令 | 吞吐量 |
+|------|--------|
+| SET | 2,145,922/s |
+| GET | 2,109,704/s |
 
-### 高并发（500 并发，pipeline 64）
+### 500 并发，pipeline 64
 
 ```
 redis-benchmark -h 127.0.0.1 -p 6377 -c 500 -n 1000000 -t set,get -P 64
 ```
 
-| 模式 | GET | SET |
-|------|-----|-----|
-| 单线程 | 1,552,795/s | 1,230,012/s |
-| 多线程 | 3,164,556/s | 952,381/s |
-| 提升 | +104% | -23% ⚠️ |
-
-> 注意：在极端写入压力下（500 并发 × pipeline 64），多线程 SET 性能反而下降，原因是写锁竞争。`RwLock` 的写锁是独占的——一个线程写入时，所有其他线程必须等待。相比之下，GET 扩展性良好，因为读锁允许并发访问。
+| 命令 | 吞吐量 |
+|------|--------|
+| SET | 3,278,688/s |
+| GET | 5,494,505/s |
 
 ### 核心结论
 
-- 单线程普通模式 GET/SET 约 9 万 QPS，接近官方 Redis 水平
-- Pipeline 模式下单线程即可达到 93 万+ QPS
-- 多线程 GET 在所有场景下扩展性良好（读锁支持并发）
-- 多线程 SET 在极端 pipeline 深度下遇到写锁竞争瓶颈
-- 256 分片 + `parking_lot::RwLock` 的设计在中等并发下表现优秀
+- 普通模式下 50 并发可达 13 万+ QPS
+- Pipeline 16 模式下吞吐量提升至 150 万~210 万 QPS
+- Pipeline 64 + 500 并发下，GET 达到 550 万 QPS，SET 达到 330 万 QPS
+- 2048 分片 DashMap 设计在高并发场景下扩展性良好
 
 ## 快速开始
 
@@ -164,6 +173,10 @@ PONG
 OK
 > GET hello
 "world"
+> SET session abc EX 60
+OK
+> TTL session
+(integer) 59
 ```
 
 ## 许可证
