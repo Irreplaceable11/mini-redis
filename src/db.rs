@@ -6,6 +6,7 @@ use rayon::prelude::*;
 
 use ahash::AHasher;
 use std::hash::{Hash, Hasher};
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
@@ -222,5 +223,20 @@ impl Db {
         let mut hasher = AHasher::default();
         key.hash(&mut hasher);
         hasher.finish() as usize & (self.shard_count - 1)
+    }
+
+    pub fn for_each_entry<F>(&self,mut f: F) -> ControlFlow<anyhow::Error>
+    where
+        F: FnMut(&Bytes, &Bytes, Option<Instant>, bool) -> ControlFlow<anyhow::Error>,
+    {
+        for shard in self.shards.iter() {
+            for ele in shard.iter() {
+                let flow = f(ele.key(), &ele.value().value, ele.value().ttl, ele.value().is_expired());
+                if flow.is_break() {
+                    return flow;
+                }
+            }
+        }
+        ControlFlow::Continue(())
     }
 }

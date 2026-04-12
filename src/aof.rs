@@ -4,6 +4,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
+use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -11,6 +12,12 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{debug, error, info};
 
 use crate::context::Context;
+
+pub enum RewriteState {
+    Normal,    // 正常模式，不做额外操作
+    Rewriting, // rewrite 进行中，需要双写增量文件
+    Finished,  // 快照写完了，writer 可以停止双写并完成收尾
+}
 
 #[derive(Clone, Copy)]
 pub enum FsyncPolicy {
@@ -187,6 +194,44 @@ impl Aof {
                 }
             };
         }
+    }
+
+    // TODO: AOF rewrite remaining steps:
+    //   1. Modify AOF writer to support dual-write (write to both old AOF and incremental file during rewrite)
+    //   2. Append incremental file to new snapshot after snapshot_to_file completes
+    //   3. Atomic rename to replace old AOF file with new one
+    //   4. Add rewrite trigger entry point (e.g. BGREWRITEAOF command or auto-trigger by file size)
+    fn snapshot_to_file(&self, path: &PathBuf, ctx: &Context) -> Result<()> {
+        let file = File::options().create(true).append(true).open(path)?;
+        let mut writer = BufWriter::new(file);
+        let mut pre_allocation: Vec<u8> = Vec::with_capacity(512);
+        let res = ctx.db().for_each_entry(
+            |key: &Bytes, value: &Bytes, expire_at: Option<Instant>, is_expired: bool| {
+                let result: Result<()> = (|| -> Result<()> {
+                    if !is_expired {
+                        let expire_at_ms = AofEntry::instant_to_ms(expire_at);
+                        pre_allocation.clear();
+                        let entry = AofEntry::Set(key.clone(), value.clone(), expire_at_ms, false, false);
+                        bincode::serialize_into(&mut pre_allocation, &entry)?;
+                        let len = pre_allocation.len() as u32;
+                        let len_bytes = len.to_be_bytes();
+                        writer.write_all(&len_bytes)?;
+                        writer.write_all(&pre_allocation)?;
+                    }
+                    Ok(())
+                })();
+                match result {
+                    Ok(_) => ControlFlow::Continue(()),
+                    Err(e) => ControlFlow::Break(e)
+                }
+            },
+        );
+        if let ControlFlow::Break(err) = res {
+            return Err(err);
+        }
+        writer.flush()?;
+        writer.get_ref().sync_data()?;
+        Ok(())
     }
 
     /// 将绝对时间戳(毫秒)转换为 Instant，同时判断是否已过期
