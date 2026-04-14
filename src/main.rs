@@ -1,5 +1,5 @@
 use anyhow::Result;
-use mini_redis::aof::{Aof, AofEntry, FsyncPolicy};
+use mini_redis::aof::{Aof, AofEntry, FsyncPolicy, RewriteState};
 use mini_redis::db::Db;
 use std::env;
 use std::sync::Arc;
@@ -7,6 +7,7 @@ use time::format_description;
 use time::macros::offset;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::Receiver;
+use tokio::sync::watch::{Receiver as WatchReceiver,  Sender as WatchSender};
 use tokio::time::{Duration, interval};
 use tracing::{info, info_span, Instrument};
 use tracing_subscriber::{EnvFilter, fmt};
@@ -32,12 +33,12 @@ async fn async_main() -> Result<()> {
     let listener = TcpListener::bind(("0.0.0.0", 6377)).await?;
     info!("mini redis listening on {:?}", listener.local_addr()?);
 
-    let (aof, rx) = init_aof().await?;
+    let (aof, rx, watch_sender) = init_aof().await?;
     let sender_clone = aof.sender.clone();
     let ctx = Arc::new(Context::new(Db::new(), PubSub::new(), Some(sender_clone)));
 
     aof.replay(ctx.clone())?;
-    tokio::spawn(aof.start_aof_writer(rx));
+    tokio::spawn(aof.start_aof_writer(rx, watch_sender, ctx.clone()));
 
     // 启动定期清理过期 key 的后台任务
     let cleanup_ctx = ctx.clone();
@@ -80,12 +81,12 @@ async fn init_log() {
         .init();
 }
 
-async fn init_aof() -> Result<(Aof, Receiver<Vec<AofEntry>>)> {
+async fn init_aof() -> Result<(Aof, Receiver<Vec<AofEntry>>, WatchSender<RewriteState>)> {
     let exe_path = env::current_exe()?;
     let exe_dir = match exe_path.parent() {
         Some(dir) => dir,
         None => return Err(anyhow::anyhow!("无法获取可执行文件的目录")),
     };
-    let (aof, rx) = Aof::new(FsyncPolicy::EverySec, exe_dir.join("listendb.aof"))?;
-    Ok((aof, rx))
+    let (aof, rx, sender) = Aof::new(FsyncPolicy::EverySec, exe_dir.join("listendb.aof"))?;
+    Ok((aof, rx, sender))
 }

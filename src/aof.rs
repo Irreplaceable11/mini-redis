@@ -2,7 +2,8 @@ use anyhow::Result;
 use bytes::Bytes;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::fs::File;
+use tokio::sync::watch::{Receiver as WatchReceiver, Sender as WatchSender};
+use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::ops::ControlFlow;
 use std::path::PathBuf;
@@ -13,10 +14,11 @@ use tracing::{debug, error, info};
 
 use crate::context::Context;
 
+
+#[derive(Clone, Copy)]
 pub enum RewriteState {
     Normal,    // 正常模式，不做额外操作
     Rewriting, // rewrite 进行中，需要双写增量文件
-    Finished,  // 快照写完了，writer 可以停止双写并完成收尾
 }
 
 #[derive(Clone, Copy)]
@@ -63,40 +65,59 @@ impl AofEntry {
         })
     }
 }
-
+const AOF_REWRITE_THRESHOLD: u64 = 10 * 1024 * 1024;
 pub struct Aof {
     pub sender: Sender<Vec<AofEntry>>,
 
     fsync_policy: FsyncPolicy,
 
     path: PathBuf,
+
+    aof_current_size: u64,
+
+    rewrite_state: WatchReceiver<RewriteState>
 }
 
 impl Aof {
-    pub fn new(fsync_policy: FsyncPolicy, path: PathBuf) -> Result<(Aof, Receiver<Vec<AofEntry>>)> {
+    pub fn new(fsync_policy: FsyncPolicy, path: PathBuf) -> Result<(Aof, Receiver<Vec<AofEntry>>, WatchSender<RewriteState>)> {
         if let Some(parent) = path.parent() {
             if !parent.exists() {
-                std::fs::create_dir_all(&parent)?;
+                fs::create_dir_all(&parent)?;
             }
         }
+        let file_len = match fs::metadata(&path) {
+            Ok(metadata) => metadata.len(),
+            Err(_) => 0,
+        };
         let (sender, receiver) = tokio::sync::mpsc::channel(4096);
+        let (tx, rx) = tokio::sync::watch::channel(RewriteState::Normal);
         let aof = Self {
             fsync_policy,
             path,
             sender,
+            aof_current_size: file_len,
+            rewrite_state: rx
         };
-        Ok((aof, receiver))
+        Ok((aof, receiver, tx))
     }
 
-    pub async fn start_aof_writer(self, mut receiver: Receiver<Vec<AofEntry>>) -> Result<()> {
+    pub async fn start_aof_writer(mut self, mut receiver: Receiver<Vec<AofEntry>>, sender: WatchSender<RewriteState>, ctx: Arc<Context>) -> Result<()> {
         let mut buffer = vec![];
-        let file = std::fs::File::options()
+        let file = File::options()
             .create(true)
             .append(true)
             .open(&self.path)?;
-        let mut writer = BufWriter::new(file);
+        let mut aof_writer = BufWriter::new(file);
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         let mut pre_allocation: Vec<u8> = Vec::with_capacity(512);
+
+        let mut incr_writer: Option<BufWriter<File>> = None;
+
+        let mut snapshot_handle: Option<tokio::task::JoinHandle<Result<()>>> = None;
+        let incr_aof_path = self.path.parent().unwrap().join("listendb.aof.incr");
+        let temp_aof_path = self.path.parent().unwrap().join("rewrite-temp.aof");
+
+        let mut is_rewriting = false;
         loop {
             tokio::select! {
                 count = receiver.recv_many(&mut buffer, 4096) => {
@@ -105,24 +126,24 @@ impl Aof {
                     }
                     for batch in buffer.drain(..) {
                         for msg in batch {
-                            pre_allocation.clear();
-                            match bincode::serialize_into(&mut pre_allocation, &msg) {
-                                Ok(_) => {
-                                    let len = pre_allocation.len() as u32;
-                                    let len_bytes = len.to_be_bytes();
-                                    writer.write_all(&len_bytes)?;
-                                    writer.write_all(&pre_allocation)?;
-                                }
-                                Err(e) => {
-                                    error!("Aof Serialization Error: {}", e);
-                                }
+                            let write_len = Self::serialize_to_file(&mut pre_allocation, &msg, &mut aof_writer)?;
+                            self.aof_current_size += write_len;
+                            // 如果正在 rewrite，同时写增量文件
+                            if let Some(ref mut incr_writer) = incr_writer {
+                                is_rewriting = true;
+                                Self::serialize_to_file(&mut pre_allocation, &msg, incr_writer)?;
                             }
                         }
                     }
-                    writer.flush()?;
+                    aof_writer.flush()?;
+                    if self.aof_current_size >= AOF_REWRITE_THRESHOLD && !is_rewriting {
+                        sender.send(RewriteState::Rewriting)?;
+                    }
                     match self.fsync_policy {
                         FsyncPolicy::Always => {
-                            writer.get_ref().sync_all()?;
+                            // 高性能选择：fdatasync
+                            // 仅确保数据和检索数据必需的元数据（如大小）落地
+                            aof_writer.get_ref().sync_data()?;
                         }
                         FsyncPolicy::No => {}
                         _ => {}
@@ -130,10 +151,92 @@ impl Aof {
                 }
                 _ = interval.tick() => {
                     if matches!(self.fsync_policy, FsyncPolicy::EverySec) {
-                        writer.flush()?;
-                        writer.get_ref().sync_all()?;
+                        aof_writer.flush()?;
+                        aof_writer.get_ref().sync_data()?;
                     }
                 }
+                Ok(()) = self.rewrite_state.changed() => {
+                    // 拿到最新的值
+                    let state = *self.rewrite_state.borrow();
+                    match state {
+                        RewriteState::Rewriting => {
+                            let temp_path_clone = temp_aof_path.clone();
+                            let incr_path_clone = incr_aof_path.clone();
+                            let incr_file = File::options()
+                                .create(true)
+                                .append(true)
+                                .open(&incr_path_clone)?;
+                            incr_writer = Some(BufWriter::new(incr_file));
+
+                            let ctx_clone = ctx.clone();
+                            let join_handler = tokio::task::spawn_blocking(move || {
+
+                                Self::snapshot_to_file(&temp_path_clone, ctx_clone)
+                            });
+                            snapshot_handle = Some(join_handler);
+                        }
+                        RewriteState::Normal => {is_rewriting = false;}
+                    }
+                }
+                result = async { snapshot_handle.as_mut().unwrap().await }, if snapshot_handle.is_some() => {
+                    snapshot_handle = None; // 用完清掉
+                    match result {
+                        Ok(Ok(())) => {
+                            // snapshot 成功，做收尾：追加增量文件、rename 等
+                            if let Some(mut incr_writer) = incr_writer.take() {
+                                // flush 刷盘
+                                incr_writer.flush()?;
+                                incr_writer.get_ref().sync_data()?;
+
+                                //读取增量 写入rewrite-temp.aof
+                                let mut reader =  BufReader::new(File::open(&incr_aof_path)?);
+
+                                let mut temp_writer = BufWriter::new(
+                                    File::options().append(true).open(&temp_aof_path)?
+                                );
+
+                                std::io::copy(&mut reader, &mut temp_writer)?;
+                                temp_writer.flush()?;
+                                //原子替换
+                                fs::rename(&temp_aof_path, &self.path)?;
+                                //重新打开主aof的writer
+                                let new_aof_writer = File::options().create(true).append(true).open(&self.path)?;
+                                aof_writer = BufWriter::new(new_aof_writer);
+                                //更新aof_current_size
+                                self.aof_current_size = fs::metadata(&self.path)?.len();
+
+                                //清理增量文件
+                                fs::remove_file(&incr_aof_path)?;
+
+                                let _ = sender.send(RewriteState::Normal);
+                            }
+                        }
+                        Ok(Err(e)) => {
+                            error!("snapshot failed: {}", e);
+                        }
+                        Err(e) => {
+                            error!("spawn_blocking panicked: {}", e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+
+    fn serialize_to_file(pre_allocation: &mut Vec<u8>, msg: &AofEntry, writer: &mut BufWriter<File>) -> Result<u64> {
+        pre_allocation.clear();
+        match bincode::serialize_into(&mut *pre_allocation, msg) {
+            Ok(_) => {
+                let len = pre_allocation.len() as u32;
+                let len_bytes = len.to_be_bytes();
+                writer.write_all(&len_bytes)?;
+                writer.write_all(&pre_allocation)?;
+                Ok((4 + pre_allocation.len()) as u64)
+            }
+            Err(e) => {
+                error!("Aof Serialization Error: {}", e);
+                Err(e.into())
             }
         }
     }
@@ -175,7 +278,7 @@ impl Aof {
                     debug!("读取到 Entry: {:?}", entry);
                     match entry {
                         AofEntry::Set(k, v, expire_at_ms, nx, xx) => {
-                            let (is_expired, instant) = Self::to_instant(expire_at_ms);
+                            let (is_expired, instant) = Self::trans_to_instant(expire_at_ms);
                             if !is_expired {
                                 ctx.db().set(k, v, instant, nx, xx);
                             }
@@ -184,7 +287,7 @@ impl Aof {
                             ctx.db().del(k);
                         }
                         AofEntry::Expire(k, expire_at_ms) => {
-                            let (_, instant) = Self::to_instant(expire_at_ms);
+                            let (_, instant) = Self::trans_to_instant(expire_at_ms);
                             ctx.db().expire(&k, instant);
                         }
                     }
@@ -201,7 +304,7 @@ impl Aof {
     //   2. Append incremental file to new snapshot after snapshot_to_file completes
     //   3. Atomic rename to replace old AOF file with new one
     //   4. Add rewrite trigger entry point (e.g. BGREWRITEAOF command or auto-trigger by file size)
-    fn snapshot_to_file(&self, path: &PathBuf, ctx: &Context) -> Result<()> {
+    fn snapshot_to_file(path: &PathBuf, ctx: Arc<Context>) -> Result<()> {
         let file = File::options().create(true).append(true).open(path)?;
         let mut writer = BufWriter::new(file);
         let mut pre_allocation: Vec<u8> = Vec::with_capacity(512);
@@ -235,7 +338,7 @@ impl Aof {
     }
 
     /// 将绝对时间戳(毫秒)转换为 Instant，同时判断是否已过期
-    fn to_instant(expire_at_ms: Option<i64>) -> (bool, Option<Instant>) {
+    fn trans_to_instant(expire_at_ms: Option<i64>) -> (bool, Option<Instant>) {
         let mut is_expired = false;
         let instant = match expire_at_ms {
             Some(timestamp) => {
