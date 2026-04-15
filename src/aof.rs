@@ -65,7 +65,7 @@ impl AofEntry {
         })
     }
 }
-const AOF_REWRITE_THRESHOLD: u64 = 10 * 1024 * 1024;
+const AOF_REWRITE_THRESHOLD: u64 =  10 * 1024 * 1024;
 pub struct Aof {
     pub sender: Sender<Vec<AofEntry>>,
 
@@ -101,7 +101,7 @@ impl Aof {
         Ok((aof, receiver, tx))
     }
 
-    pub async fn start_aof_writer(mut self, mut receiver: Receiver<Vec<AofEntry>>, sender: WatchSender<RewriteState>, ctx: Arc<Context>) -> Result<()> {
+    pub async fn start_aof_writer(mut self, mut receiver: Receiver<Vec<AofEntry>>, ctx: Arc<Context>) -> Result<()> {
         let mut buffer = vec![];
         let file = File::options()
             .create(true)
@@ -137,7 +137,8 @@ impl Aof {
                     }
                     aof_writer.flush()?;
                     if self.aof_current_size >= AOF_REWRITE_THRESHOLD && !is_rewriting {
-                        sender.send(RewriteState::Rewriting)?;
+                        info!("AOF rewrite triggered, current size: {} bytes", self.aof_current_size);
+                        ctx.send_rewrite_state(RewriteState::Rewriting)?;
                     }
                     match self.fsync_policy {
                         FsyncPolicy::Always => {
@@ -160,6 +161,7 @@ impl Aof {
                     let state = *self.rewrite_state.borrow();
                     match state {
                         RewriteState::Rewriting => {
+                            info!("AOF rewrite state: Rewriting, starting snapshot and incremental writer");
                             let temp_path_clone = temp_aof_path.clone();
                             let incr_path_clone = incr_aof_path.clone();
                             let incr_file = File::options()
@@ -182,6 +184,7 @@ impl Aof {
                     snapshot_handle = None; // 用完清掉
                     match result {
                         Ok(Ok(())) => {
+                            info!("AOF snapshot completed, starting finalize");
                             // snapshot 成功，做收尾：追加增量文件、rename 等
                             if let Some(mut incr_writer) = incr_writer.take() {
                                 // flush 刷盘
@@ -208,7 +211,8 @@ impl Aof {
                                 //清理增量文件
                                 fs::remove_file(&incr_aof_path)?;
 
-                                let _ = sender.send(RewriteState::Normal);
+                                let _ = ctx.send_rewrite_state(RewriteState::Normal)?;
+                                info!("AOF rewrite finished, new size: {} bytes", self.aof_current_size);
                             }
                         }
                         Ok(Err(e)) => {
@@ -299,11 +303,6 @@ impl Aof {
         }
     }
 
-    // TODO: AOF rewrite remaining steps:
-    //   1. Modify AOF writer to support dual-write (write to both old AOF and incremental file during rewrite)
-    //   2. Append incremental file to new snapshot after snapshot_to_file completes
-    //   3. Atomic rename to replace old AOF file with new one
-    //   4. Add rewrite trigger entry point (e.g. BGREWRITEAOF command or auto-trigger by file size)
     fn snapshot_to_file(path: &PathBuf, ctx: Arc<Context>) -> Result<()> {
         let file = File::options().create(true).append(true).open(path)?;
         let mut writer = BufWriter::new(file);

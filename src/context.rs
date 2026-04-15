@@ -1,23 +1,30 @@
-use std::sync::Arc;
-use crate::aof::AofEntry;
+use crate::aof::{AofEntry, RewriteState};
 use crate::db::Db;
 use crate::pubsub::PubSub;
 use anyhow::Result;
+use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
-
+use tokio::sync::watch::Sender as WatchSender;
 
 pub struct Context {
     db: Arc<Db>,
     pub_sub: PubSub,
     aof_sender: Option<Sender<Vec<AofEntry>>>,
+    rewrite_sender: Option<WatchSender<RewriteState>>,
 }
 
 impl Context {
-    pub fn new(db: Db, pub_sub: PubSub, aof_sender: Option<Sender<Vec<AofEntry>>>) -> Self {
+    pub fn new(
+        db: Db,
+        pub_sub: PubSub,
+        aof_sender: Option<Sender<Vec<AofEntry>>>,
+        rewrite_sender: Option<WatchSender<RewriteState>>,
+    ) -> Self {
         Context {
             db: Arc::new(db),
             pub_sub,
             aof_sender,
+            rewrite_sender,
         }
     }
 
@@ -36,6 +43,13 @@ impl Context {
         }
         if let Some(sender) = &self.aof_sender {
             sender.send(entries).await?;
+        }
+        Ok(())
+    }
+
+    pub fn send_rewrite_state(&self, state: RewriteState) -> Result<()> {
+        if let Some(sender) = &self.rewrite_sender {
+            sender.send(state)?;
         }
         Ok(())
     }

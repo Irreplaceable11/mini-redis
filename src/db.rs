@@ -207,6 +207,56 @@ impl Db {
         .unwrap_or_default()
     }
 
+    /// INCR / DECR / INCRBY / DECRBY 通用方法
+    /// INCR key     → incr(key, 1)
+    /// DECR key     → incr(key, -1)
+    /// INCRBY key n → incr(key, n)
+    /// DECRBY key n → incr(key, -n)
+    pub fn incr_by(&self, key: Bytes, delta: i64) -> Result<i64, &'static str> {
+        let idx = self.shard_index(&key);
+        let shard = &self.shards[idx];
+
+        let mut result: Result<i64, &'static str> = Ok(0);
+
+        shard.entry(key)
+            .and_modify(|entry| {
+                if entry.is_expired() {
+                    // 过期等同于不存在，从 0 开始
+                    result = Ok(delta);
+                    let mut buffer = itoa::Buffer::new();
+                    let printed = buffer.format(delta);
+                    entry.value = Bytes::copy_from_slice(printed.as_bytes());
+                    entry.ttl = None;
+                    return;
+                }
+
+                match atoi::atoi::<i64>(&entry.value) {
+                    Some(old_val) => match old_val.checked_add(delta) {
+                        Some(new_val) => {
+                            result = Ok(new_val);
+                            let mut buffer = itoa::Buffer::new();
+                            let printed = buffer.format(new_val);
+                            entry.value = Bytes::copy_from_slice(printed.as_bytes());
+                        }
+                        None => {
+                            result = Err("ERR increment or decrement would overflow");
+                        }
+                    },
+                    None => {
+                        result = Err("ERR value is not an integer or out of range");
+                    }
+                }
+            })
+            .or_insert_with(|| {
+                result = Ok(delta);
+                let mut buffer = itoa::Buffer::new();
+                let printed = buffer.format(delta);
+                Entry::new(Bytes::copy_from_slice(printed.as_bytes()), None)
+            });
+
+        result
+    }
+
     pub fn clean_up(&self) {
         let start = self
             .next_shard_index

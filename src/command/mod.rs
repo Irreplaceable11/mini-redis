@@ -10,6 +10,11 @@ pub mod keys;
 pub mod publish;
 pub mod subscribe;
 pub mod unsubscribe;
+mod bgrewriteaof;
+pub mod incr;
+pub mod decr;
+pub mod incrby;
+pub mod decrby;
 
 use crate::aof::AofEntry;
 use crate::frame::Frame;
@@ -35,9 +40,14 @@ pub enum Command {
     Ttl(ttl::Ttl),
     Expire(expire::Expire),
     Keys(keys::Keys),
+    Incr(incr::Incr),
+    Decr(decr::Decr),
+    IncrBy(incrby::IncrBy),
+    DecrBy(decrby::DecrBy),
     Publish(publish::Publish),
     Subscribe(subscribe::Subscribe),
     Unsubscribe(unsubscribe::Unsubscribe),
+    BgRewriteAof(bgrewriteaof::BgRewriteAof),
     Unknown(String),
 }
 
@@ -51,7 +61,12 @@ impl Command {
             Command::Exist(cmd) => cmd.execute(ctx),
             Command::Ttl(cmd) => cmd.execute(ctx),
             Command::Expire(cmd) => cmd.execute(ctx),
+            Command::Incr(cmd) => cmd.execute(ctx),
+            Command::Decr(cmd) => cmd.execute(ctx),
+            Command::IncrBy(cmd) => cmd.execute(ctx),
+            Command::DecrBy(cmd) => cmd.execute(ctx),
             Command::Publish(cmd)  => cmd.execute(ctx),
+            Command::BgRewriteAof(cmd) => cmd.execute(ctx),
             Command::Unknown(cmd) => (Frame::Error(Bytes::from(format!("Command failed, unknown command:{:?}", cmd))), None),
             _ => (Frame::Error(Bytes::from("ERR command not implemented".to_string())), None),
         }
@@ -81,6 +96,11 @@ impl Command {
             b"PUBLISH" => Ok(Command::Publish(publish::Publish::parse(&arg)?)),
             b"SUBSCRIBE" => Ok(Command::Subscribe(subscribe::Subscribe::parse(&arg)?)),
             b"UNSUBSCRIBE" => Ok(Command::Unsubscribe(unsubscribe::Unsubscribe::parse(&arg)?)),
+            b"BGREWRITEAOF" => Ok(Command::BgRewriteAof(bgrewriteaof::BgRewriteAof::parse(&arg)?)),
+            b"INCR" => Ok(Command::Incr(incr::Incr::parse(&arg)?)),
+            b"DECR" => Ok(Command::Decr(decr::Decr::parse(&arg)?)),
+            b"INCRBY" => Ok(Command::IncrBy(incrby::IncrBy::parse(&arg)?)),
+            b"DECRBY" => Ok(Command::DecrBy(decrby::DecrBy::parse(&arg)?)),
             _ => {
                 let cmd_name_string = str::from_utf8(cmd_name)?;
                 info!("unknown command: {}", cmd_name_string);

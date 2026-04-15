@@ -7,7 +7,7 @@ use time::format_description;
 use time::macros::offset;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::Receiver;
-use tokio::sync::watch::{Receiver as WatchReceiver,  Sender as WatchSender};
+use tokio::sync::watch::Sender as WatchSender;
 use tokio::time::{Duration, interval};
 use tracing::{info, info_span, Instrument};
 use tracing_subscriber::{EnvFilter, fmt};
@@ -35,10 +35,20 @@ async fn async_main() -> Result<()> {
 
     let (aof, rx, watch_sender) = init_aof().await?;
     let sender_clone = aof.sender.clone();
-    let ctx = Arc::new(Context::new(Db::new(), PubSub::new(), Some(sender_clone)));
+    let ctx = Arc::new(Context::new(Db::new(), PubSub::new(), Some(sender_clone), Some(watch_sender)));
 
     aof.replay(ctx.clone())?;
-    tokio::spawn(aof.start_aof_writer(rx, watch_sender, ctx.clone()));
+    let aof_ctx = ctx.clone();
+    //aof单独一个线程
+    std::thread::Builder::new()
+        .name("aof-writer".into())
+        .spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to create AOF runtime");
+            rt.block_on(aof.start_aof_writer(rx, aof_ctx))
+        })?;
 
     // 启动定期清理过期 key 的后台任务
     let cleanup_ctx = ctx.clone();
