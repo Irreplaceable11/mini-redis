@@ -15,6 +15,7 @@ pub mod incr;
 pub mod decr;
 pub mod incrby;
 pub mod decrby;
+mod incrbyfloat;
 
 use crate::aof::AofEntry;
 use crate::frame::Frame;
@@ -24,7 +25,7 @@ use bytes::Bytes;
 use smallvec::SmallVec;
 use tracing::info;
 // 导出解析辅助函数，供各个命令模块使用
-pub(crate) use parse::{extract_bytes, extract_i64, extract_string};
+pub(crate) use parse::{extract_bytes, extract_i64, extract_f64, extract_string};
 
 pub(crate) trait CommandExecute {
     fn execute(self, ctx: &Context) -> (Frame, Option<AofEntry>);
@@ -44,6 +45,7 @@ pub enum Command {
     Decr(decr::Decr),
     IncrBy(incrby::IncrBy),
     DecrBy(decrby::DecrBy),
+    IncrByFloat(incrbyfloat::IncrByFloat),
     Publish(publish::Publish),
     Subscribe(subscribe::Subscribe),
     Unsubscribe(unsubscribe::Unsubscribe),
@@ -65,6 +67,7 @@ impl Command {
             Command::Decr(cmd) => cmd.execute(ctx),
             Command::IncrBy(cmd) => cmd.execute(ctx),
             Command::DecrBy(cmd) => cmd.execute(ctx),
+            Command::IncrByFloat(cmd)  => cmd.execute(ctx),
             Command::Publish(cmd)  => cmd.execute(ctx),
             Command::BgRewriteAof(cmd) => cmd.execute(ctx),
             Command::Unknown(cmd) => (Frame::Error(Bytes::from(format!("Command failed, unknown command:{:?}", cmd))), None),
@@ -89,7 +92,7 @@ impl Command {
             b"SET" => Ok(Command::Set(set::Set::parse(&arg)?)),
             b"GET" => Ok(Command::Get(get::Get::parse(&arg)?)),
             b"DEL" => Ok(Command::Del(del::Del::parse(&arg)?)),
-            b"EXIST" => Ok(Command::Exist(exists::Exists::parse(&arg)?)),
+            b"EXISTS" => Ok(Command::Exist(exists::Exists::parse(&arg)?)),
             b"TTL" | b"PTTL" => Ok(Command::Ttl(ttl::Ttl::parse(&cmd_name, &arg)?)),
             b"EXPIRE" | b"PEXPIRE" => Ok(Command::Expire(expire::Expire::parse(&cmd_name, &arg)?)),
             b"KEYS" => Ok(Command::Keys(keys::Keys::parse(&arg)?)),
@@ -101,6 +104,7 @@ impl Command {
             b"DECR" => Ok(Command::Decr(decr::Decr::parse(&arg)?)),
             b"INCRBY" => Ok(Command::IncrBy(incrby::IncrBy::parse(&arg)?)),
             b"DECRBY" => Ok(Command::DecrBy(decrby::DecrBy::parse(&arg)?)),
+            b"INCRBYFLOAT" => Ok(Command::IncrByFloat(incrbyfloat::IncrByFloat::parse(&arg)?)),
             _ => {
                 let cmd_name_string = str::from_utf8(cmd_name)?;
                 info!("unknown command: {}", cmd_name_string);

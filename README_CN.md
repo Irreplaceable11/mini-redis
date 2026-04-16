@@ -9,7 +9,8 @@
 - 2048 分片 `DashMap` 存储，细粒度并发访问
 - 基于 `bytes::BytesMut` split/freeze 的零拷贝帧解析
 - 批量读取 + 批量写入优化，提升 pipeline 模式吞吐量
-- 后台 TTL 清理任务，轮询式分片扫描
+- 基于分片 BTreeMap 索引的后台 TTL 清理（精准 `split_off` 替代全量扫描）
+- 读取时惰性过期 + 每 5 秒轮询批次主动清理
 - 基于 `tokio::sync::broadcast` 通道的发布/订阅消息系统
 - AOF（Append-Only File）持久化，支持可配置的 fsync 策略
 - jemalloc 内存分配器，减少内存碎片
@@ -41,7 +42,9 @@
    │  │    Db    │  │ PubSub │  │ AOF │  │
    │  │2048 分片 │  │DashMap │  │写入 │  │
    │  │ DashMap  │  │broadcast│ │日志 │  │
-   │  └──────────┘  └────────┘  └─────┘  │
+   │  │+BTreeMap │  └────────┘  └─────┘  │
+   │  │ 过期索引 │                        │
+   │  └──────────┘                        │
    └──────────────────────────────────────┘
 ```
 
@@ -59,9 +62,15 @@
 | `TTL key` | 查询剩余过期时间（秒） |
 | `PTTL key` | 查询剩余过期时间（毫秒） |
 | `KEYS pattern` | 按 glob 模式匹配键（通过 `spawn_blocking` + rayon 异步并行扫描） |
+| `INCR key` | 将键的整数值加 1 |
+| `DECR key` | 将键的整数值减 1 |
+| `INCRBY key increment` | 将键的整数值增加指定数量 |
+| `DECRBY key decrement` | 将键的整数值减少指定数量 |
+| `INCRBYFLOAT key increment` | 将键的浮点数值增加指定数量 |
 | `PUBLISH channel message` | 向频道发布消息 |
 | `SUBSCRIBE channel [channel ...]` | 订阅频道 |
 | `UNSUBSCRIBE channel [channel ...]` | 取消订阅频道 |
+| `BGREWRITEAOF` | 触发后台 AOF 重写 |
 
 ## 持久化
 
@@ -71,7 +80,18 @@
 - `EverySec` — 每秒 fsync 一次（安全与性能的平衡）
 - `No` — 由操作系统决定何时刷盘（最快，最不安全）
 
+AOF 使用长度前缀 + `bincode` 二进制格式序列化，紧凑高效。每条记录存储命令类型、key、value 及绝对过期时间戳（毫秒）。
+
 启动时自动重放 AOF 文件恢复数据，已过期的 key 在重放时会被跳过。
+
+### BGREWRITEAOF
+
+支持后台 AOF 重写以压缩日志文件：
+
+- 当 AOF 文件超过 10MB 时自动触发，也可通过 `BGREWRITEAOF` 命令手动触发
+- 快照阶段在阻塞线程（`spawn_blocking`）中执行，避免阻塞异步运行时
+- 重写期间，增量写入会双写到独立的 `.incr` 文件
+- 快照完成后，追加增量文件内容并原子替换（`rename`）原 AOF 文件
 
 ## 技术栈
 
@@ -80,7 +100,7 @@
 | 异步运行时 | `tokio`（多线程模式） | 业界标准，work-stealing 调度器 |
 | 字节缓冲 | `bytes` | 零拷贝的 `BytesMut`/`Bytes`，用于 RESP 解析 |
 | 快速搜索 | `memchr` | SIMD 加速的 `\r\n` 扫描 |
-| 数字格式化 | `itoa` / `atoi` | 无堆分配的整数转 ASCII |
+| 数字格式化 | `itoa` / `atoi` / `lexical-core` | 无堆分配的整数转 ASCII 及高速浮点数解析/格式化 |
 | 并发 Map | `dashmap` + `ahash` | 分段锁 Map，用于 DB 和 Pub/Sub |
 | Glob 匹配 | `fast-glob` | Redis 风格的模式匹配，用于 KEYS 命令 |
 | 并行扫描 | `rayon` | 并行迭代器，用于 KEYS 跨分片扫描 |

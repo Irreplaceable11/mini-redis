@@ -77,6 +77,23 @@ pub fn extract_usize(frame: &Frame) -> Result<usize> {
     }
 }
 
+/// 从 Frame 中提取 f64 类型的浮点数
+/// 用于解析 INCRBYFLOAT 等命令的浮点参数
+pub fn extract_f64(frame: &Frame) -> Result<f64> {
+    match frame {
+        Frame::BulkString(bytes) => {
+            let val = lexical_core::parse::<f64>(bytes)
+                .map_err(|_| anyhow!("ERR value is not a valid float"))?;
+            if val.is_nan() || val.is_infinite() {
+                return Err(anyhow!("ERR increment would produce NaN or Infinity"));
+            }
+            Ok(val)
+        }
+        Frame::Integer(i) => Ok(*i as f64),
+        _ => Err(anyhow!("ERR value is not a valid float")),
+    }
+}
+
 /// 从 Frame 中提取 u64 类型的整数
 /// 用于解析毫秒级时间戳、大数值等参数
 pub fn extract_u64(frame: &Frame) -> Result<u64> {

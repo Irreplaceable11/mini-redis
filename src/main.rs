@@ -53,7 +53,7 @@ async fn async_main() -> Result<()> {
     // 启动定期清理过期 key 的后台任务
     let cleanup_ctx = ctx.clone();
     tokio::spawn(async move {
-        let mut intv = interval(Duration::from_secs(30));
+        let mut intv = interval(Duration::from_secs(5));
         loop {
             intv.tick().await;
             cleanup_ctx.db().clean_up();

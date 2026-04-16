@@ -9,7 +9,8 @@ A high-performance Redis server implementation written in Rust for learning purp
 - 2048-shard partitioned storage using `DashMap` for fine-grained concurrent access
 - Zero-copy frame parsing with `bytes::BytesMut` split/freeze
 - Batch read + batch write optimization for pipeline mode
-- Background TTL cleanup with round-robin shard scanning
+- Background TTL cleanup with BTreeMap-indexed expiry per shard (precise `split_off` instead of full scan)
+- Lazy expiration on read + active expiration every 5 seconds via round-robin shard batches
 - Pub/Sub messaging via `tokio::sync::broadcast` channels
 - AOF (Append-Only File) persistence with configurable fsync policies
 - jemalloc allocator for reduced memory fragmentation
@@ -41,7 +42,9 @@ A high-performance Redis server implementation written in Rust for learning purp
    │  │    Db    │  │ PubSub │  │ AOF │  │
    │  │2048-shard│  │DashMap │  │Write│  │
    │  │ DashMap  │  │broadcast│ │ Log │  │
-   │  └──────────┘  └────────┘  └─────┘  │
+   │  │+BTreeMap │  └────────┘  └─────┘  │
+   │  │ expiry   │                        │
+   │  └──────────┘                        │
    └──────────────────────────────────────┘
 ```
 
@@ -59,9 +62,15 @@ A high-performance Redis server implementation written in Rust for learning purp
 | `TTL key` | Get remaining TTL in seconds |
 | `PTTL key` | Get remaining TTL in milliseconds |
 | `KEYS pattern` | Find keys matching glob pattern (async via `spawn_blocking` + rayon) |
+| `INCR key` | Increment integer value by 1 |
+| `DECR key` | Decrement integer value by 1 |
+| `INCRBY key increment` | Increment integer value by given amount |
+| `DECRBY key decrement` | Decrement integer value by given amount |
+| `INCRBYFLOAT key increment` | Increment float value by given amount |
 | `PUBLISH channel message` | Publish message to channel |
 | `SUBSCRIBE channel [channel ...]` | Subscribe to channels |
 | `UNSUBSCRIBE channel [channel ...]` | Unsubscribe from channels |
+| `BGREWRITEAOF` | Trigger background AOF rewrite |
 
 ## Persistence
 
@@ -71,7 +80,18 @@ AOF (Append-Only File) support with three fsync policies:
 - `EverySec` — fsync once per second (good balance)
 - `No` — let the OS decide when to flush (fastest, least safe)
 
+AOF uses a length-prefixed binary format (`bincode`) for compact and fast serialization. Each entry stores the command type, key, value, and absolute expiry timestamp in milliseconds.
+
 On startup, the AOF file is replayed to restore state. Expired keys are skipped during replay.
+
+### BGREWRITEAOF
+
+Supports background AOF rewrite to compact the log file:
+
+- Triggered automatically when AOF file exceeds 10MB, or manually via `BGREWRITEAOF` command
+- Snapshot phase runs in a blocking thread (`spawn_blocking`) to avoid stalling the async runtime
+- During rewrite, incremental writes are dual-written to a separate `.incr` file
+- After snapshot completes, the incremental file is appended and atomically renamed to replace the original AOF
 
 ## Tech Stack
 
@@ -80,7 +100,7 @@ On startup, the AOF file is replayed to restore state. Expired keys are skipped 
 | Async Runtime | `tokio` (multi-thread) | Industry standard, work-stealing scheduler |
 | Byte Buffers | `bytes` | Zero-copy `BytesMut`/`Bytes` for RESP parsing |
 | Fast Search | `memchr` | SIMD-accelerated `\r\n` scanning |
-| Number Format | `itoa` / `atoi` | Heap-free integer-to-ASCII conversion |
+| Number Format | `itoa` / `atoi` / `lexical-core` | Heap-free integer-to-ASCII and fast float parsing/formatting |
 | Concurrent Map | `dashmap` + `ahash` | Lock-sharded map for DB and Pub/Sub |
 | Glob Matching | `fast-glob` | Redis-style pattern matching for KEYS |
 | Parallel Scan | `rayon` | Parallel iterator for KEYS across shards |
