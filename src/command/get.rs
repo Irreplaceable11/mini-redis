@@ -22,8 +22,9 @@ impl Get {
 impl CommandExecute for Get {
     fn execute(self, ctx: &Context) -> (Frame, Option<crate::aof::AofEntry>) {
         match ctx.db().get(&self.key) {
-            Some(value) => (Frame::BulkString(value), None),
-            None => (Frame::Null, None),
+            Ok(Some(value)) => (Frame::BulkString(value), None),
+            Ok(None) => (Frame::Null, None),
+            Err(e) => (Frame::Error(Bytes::from_static(e.as_bytes())), None),
         }
     }
 }

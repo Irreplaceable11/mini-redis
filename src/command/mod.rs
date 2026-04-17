@@ -16,6 +16,7 @@ pub mod decr;
 pub mod incrby;
 pub mod decrby;
 mod incrbyfloat;
+mod push;
 
 use crate::aof::AofEntry;
 use crate::frame::Frame;
@@ -46,6 +47,7 @@ pub enum Command {
     IncrBy(incrby::IncrBy),
     DecrBy(decrby::DecrBy),
     IncrByFloat(incrbyfloat::IncrByFloat),
+    Push(push::Push),
     Publish(publish::Publish),
     Subscribe(subscribe::Subscribe),
     Unsubscribe(unsubscribe::Unsubscribe),
@@ -68,6 +70,7 @@ impl Command {
             Command::IncrBy(cmd) => cmd.execute(ctx),
             Command::DecrBy(cmd) => cmd.execute(ctx),
             Command::IncrByFloat(cmd)  => cmd.execute(ctx),
+            Command::Push(cmd)  => cmd.execute(ctx),
             Command::Publish(cmd)  => cmd.execute(ctx),
             Command::BgRewriteAof(cmd) => cmd.execute(ctx),
             Command::Unknown(cmd) => (Frame::Error(Bytes::from(format!("Command failed, unknown command:{:?}", cmd))), None),
@@ -105,6 +108,8 @@ impl Command {
             b"INCRBY" => Ok(Command::IncrBy(incrby::IncrBy::parse(&arg)?)),
             b"DECRBY" => Ok(Command::DecrBy(decrby::DecrBy::parse(&arg)?)),
             b"INCRBYFLOAT" => Ok(Command::IncrByFloat(incrbyfloat::IncrByFloat::parse(&arg)?)),
+            b"LPUSH" => Ok(Command::Push(push::Push::parse(&arg, true)?)),
+            b"RPUSH" => Ok(Command::Push(push::Push::parse(&arg, false)?)),
             _ => {
                 let cmd_name_string = str::from_utf8(cmd_name)?;
                 info!("unknown command: {}", cmd_name_string);

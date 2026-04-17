@@ -1,25 +1,74 @@
 mod string;
 mod expiry;
+mod list;
 
-use std::collections::BTreeMap;
 use bytes::Bytes;
 use dashmap::DashMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use ahash::AHasher;
 use std::hash::{Hash, Hasher};
 use std::ops::ControlFlow;
-use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
+use std::sync::Mutex;
 use std::time::Instant;
 
 pub struct Entry {
-    pub(crate) value: Bytes,
+    pub(crate) value: EntryValue,
     pub(crate) ttl: Option<Instant>,
 }
 
+
+impl EntryValue {
+    /// 尝试获取 String 类型的引用
+    pub fn as_string(&self) -> Result<&Bytes, &'static str> {
+        match self {
+            EntryValue::String(b) => Ok(b),
+            _ => Err("WRONGTYPE Operation against a key holding the wrong kind of value"),
+        }
+    }
+
+    /// 尝试获取 List 类型的引用
+    pub fn as_list(&self) -> Result<&VecDeque<Bytes>, &'static str> {
+        match self {
+            EntryValue::List(l) => Ok(l),
+            _ => Err("WRONGTYPE Operation against a key holding the wrong kind of value"),
+        }
+    }
+
+    /// 尝试获取 List 类型的可变引用
+    pub fn as_list_mut(&mut self) -> Result<&mut VecDeque<Bytes>, &'static str> {
+        match self {
+            EntryValue::List(l) => Ok(l),
+            _ => Err("WRONGTYPE Operation against a key holding the wrong kind of value"),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum EntryValue {
+    String(Bytes),
+
+    List(VecDeque<Bytes>),
+}
+
+
+impl From<Bytes> for EntryValue {
+    fn from(value: Bytes) -> Self {
+       EntryValue::String(value)
+    }
+}
+
+impl From<VecDeque<Bytes>> for EntryValue {
+    fn from(value: VecDeque<Bytes>) -> Self {
+        EntryValue::List(value)
+    }
+}
+
 impl Entry {
-    pub fn new(value: Bytes, ttl: Option<Instant>) -> Entry {
-        Entry { value, ttl }
+    pub fn new<T>(value: T, ttl: Option<Instant>) -> Entry
+    where T: Into<EntryValue> {
+        Entry { value: value.into(), ttl }
     }
 
     /// 判断是否已过期：没有设置 ttl 的永不过期
@@ -64,7 +113,7 @@ impl Db {
 
     pub fn for_each_entry<F>(&self, mut f: F) -> ControlFlow<anyhow::Error>
     where
-        F: FnMut(&Bytes, &Bytes, Option<Instant>, bool) -> ControlFlow<anyhow::Error>,
+        F: FnMut(&Bytes, &EntryValue, Option<Instant>, bool) -> ControlFlow<anyhow::Error>,
     {
         for shard in self.shards.iter() {
             for ele in shard.iter() {

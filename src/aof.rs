@@ -13,7 +13,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{debug, error, info};
 
 use crate::context::Context;
-
+use crate::db::EntryValue;
 
 #[derive(Clone, Copy)]
 pub enum RewriteState {
@@ -36,6 +36,8 @@ pub enum AofEntry {
     Del(Vec<Bytes>),
     // key, expire_at_ms(绝对时间戳)
     Expire(Bytes, Option<i64>),
+
+    Push(Bytes, Vec<Bytes>, bool),
 }
 
 impl AofEntry {
@@ -294,6 +296,9 @@ impl Aof {
                             let (_, instant) = Self::trans_to_instant(expire_at_ms);
                             ctx.db().expire(&k, instant);
                         }
+                        AofEntry::Push(k, values, is_left) => {
+                            let _ = ctx.db().push(k, values, is_left);
+                        }
                     }
                 }
                 Err(e) => {
@@ -308,12 +313,32 @@ impl Aof {
         let mut writer = BufWriter::new(file);
         let mut pre_allocation: Vec<u8> = Vec::with_capacity(512);
         let res = ctx.db().for_each_entry(
-            |key: &Bytes, value: &Bytes, expire_at: Option<Instant>, is_expired: bool| {
+            |key: &Bytes, value: &EntryValue, expire_at: Option<Instant>, is_expired: bool| {
                 let result: Result<()> = (|| -> Result<()> {
                     if !is_expired {
                         let expire_at_ms = AofEntry::instant_to_ms(expire_at);
                         pre_allocation.clear();
-                        let entry = AofEntry::Set(key.clone(), value.clone(), expire_at_ms, false, false);
+                        let entry = match value {
+                            EntryValue::String(bytes) => {
+                                AofEntry::Set(key.clone(), bytes.clone(), expire_at_ms, false, false);
+                            }
+                            EntryValue::List(list) => {
+                                let values: Vec<Bytes> = list.iter().cloned().collect();
+                                /*
+                                    假设内存里是[1,2,3]
+                                    RPUSH key 1 2 3
+                                    → push_back(1): [1]
+                                    → push_back(2): [1, 2]
+                                    → push_back(3): [1, 2, 3]
+                                    LPUSH key 1 2 3
+                                    → push_front(1): [1]
+                                    → push_front(2): [2, 1]
+                                    → push_front(3): [3, 2, 1]
+                                    lpush是头插法, 队列先进先出，使用lpush插入时新元素会跑到最里面，所以使用rpush还原
+                                */
+                                AofEntry::Push(key.clone(), values, false);
+                            }
+                        };
                         bincode::serialize_into(&mut pre_allocation, &entry)?;
                         let len = pre_allocation.len() as u32;
                         let len_bytes = len.to_be_bytes();
