@@ -17,6 +17,12 @@ pub mod incrby;
 pub mod decrby;
 mod incrbyfloat;
 mod push;
+pub mod pop;
+mod llen;
+mod lrange;
+mod lindex;
+mod lrem;
+mod lset;
 
 use crate::aof::AofEntry;
 use crate::frame::Frame;
@@ -48,6 +54,12 @@ pub enum Command {
     DecrBy(decrby::DecrBy),
     IncrByFloat(incrbyfloat::IncrByFloat),
     Push(push::Push),
+    Pop(pop::Pop),
+    Llen(llen::Llen),
+    Lrange(lrange::Lrange),
+    Lindex(lindex::Lindex),
+    Lrem(lrem::Lrem),
+    Lset(lset::Lset),
     Publish(publish::Publish),
     Subscribe(subscribe::Subscribe),
     Unsubscribe(unsubscribe::Unsubscribe),
@@ -71,6 +83,12 @@ impl Command {
             Command::DecrBy(cmd) => cmd.execute(ctx),
             Command::IncrByFloat(cmd)  => cmd.execute(ctx),
             Command::Push(cmd)  => cmd.execute(ctx),
+            Command::Pop(cmd)  => cmd.execute(ctx),
+            Command::Llen(cmd)  => cmd.execute(ctx),
+            Command::Lrange(cmd)  => cmd.execute(ctx),
+            Command::Lindex(cmd)  => cmd.execute(ctx),
+            Command::Lrem(cmd)  => cmd.execute(ctx),
+            Command::Lset(cmd)  => cmd.execute(ctx),
             Command::Publish(cmd)  => cmd.execute(ctx),
             Command::BgRewriteAof(cmd) => cmd.execute(ctx),
             Command::Unknown(cmd) => (Frame::Error(Bytes::from(format!("Command failed, unknown command:{:?}", cmd))), None),
@@ -110,6 +128,13 @@ impl Command {
             b"INCRBYFLOAT" => Ok(Command::IncrByFloat(incrbyfloat::IncrByFloat::parse(&arg)?)),
             b"LPUSH" => Ok(Command::Push(push::Push::parse(&arg, true)?)),
             b"RPUSH" => Ok(Command::Push(push::Push::parse(&arg, false)?)),
+            b"LPOP" => Ok(Command::Pop(pop::Pop::parse(&arg, true)?)),
+            b"RPOP" => Ok(Command::Pop(pop::Pop::parse(&arg, false)?)),
+            b"LLEN" => Ok(Command::Llen(llen::Llen::parse(&arg)?)),
+            b"LRANGE" => Ok(Command::Lrange(lrange::Lrange::parse(&arg)?)),
+            b"LINDEX" => Ok(Command::Lindex(lindex::Lindex::parse(&arg)?)),
+            b"LREM" => Ok(Command::Lrem(lrem::Lrem::parse(&arg)?)),
+            b"LSET" => Ok(Command::Lset(lset::Lset::parse(&arg)?)),
             _ => {
                 let cmd_name_string = str::from_utf8(cmd_name)?;
                 info!("unknown command: {}", cmd_name_string);

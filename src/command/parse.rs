@@ -77,6 +77,20 @@ pub fn extract_usize(frame: &Frame) -> Result<usize> {
     }
 }
 
+/// 从 Frame 中提取 isize 类型的整数
+/// 用于解析 LRANGE 等命令的索引参数（支持负数）
+pub fn extract_isize(frame: &Frame) -> Result<isize> {
+    match frame {
+        Frame::BulkString(bytes) => {
+            let s = std::str::from_utf8(bytes)?;
+            s.parse::<isize>()
+                .map_err(|_| anyhow!("ERR value is not an integer or out of range"))
+        }
+        Frame::Integer(i) => Ok(*i as isize),
+        _ => Err(anyhow!("ERR value is not an integer or out of range")),
+    }
+}
+
 /// 从 Frame 中提取 f64 类型的浮点数
 /// 用于解析 INCRBYFLOAT 等命令的浮点参数
 pub fn extract_f64(frame: &Frame) -> Result<f64> {

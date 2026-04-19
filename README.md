@@ -169,6 +169,50 @@ redis-benchmark -h 127.0.0.1 -p 6377 -c 500 -n 1000000 -t set,get -P 64
 | SET | 3,278,688/s |
 | GET | 5,494,505/s |
 
+### Performance Profiling (Flamegraph Analysis)
+
+Profiled with `perf` + `inferno` flamegraph under 500 clients, pipeline 64, 2M requests.
+
+#### Scenario Comparison
+
+| Scenario | Throughput | vs Baseline |
+|----------|-----------|-------------|
+| SET (no TTL) | 1,919,385/s | baseline |
+| GET (no TTL) | 5,128,205/s | baseline |
+| SET with TTL (EX 5) | 1,196,172/s | -37.5% |
+| SET hotkey (single key) | 2,066,115/s | +7.8% |
+
+#### CPU Hotspot Breakdown (Baseline: SET/GET no TTL)
+
+| Function | CPU % | Category |
+|----------|-------|----------|
+| Kernel (epoll/futex/network stack) | ~40% | System calls |
+| `bytes_mut::shared_v_drop` | 2.81% | Bytes refcount |
+| `Mutex::lock_contended` | 2.78% | Lock contention |
+| `bytes_mut::shared_v_clone` | 2.22% | Bytes refcount |
+| `Db::set` | 2.21% | Core SET logic |
+| `syscall` | 1.64% | System calls |
+| `Command::from_frame` | 1.49% | RESP parsing |
+| `handle_connection` | 1.42% | Connection handler |
+| `DashMap::_entry` | 1.20% | DashMap entry API |
+| `Connection::find_crlf` | 1.06% | Frame parsing |
+
+#### TTL Scenario: Additional Overhead
+
+| Function | Baseline | With TTL | Delta |
+|----------|----------|----------|-------|
+| `Mutex::lock_contended` | 2.78% | 3.43% | +0.65% |
+| `__vdso_clock_gettime` | 0.35% | 1.03% | +0.68% |
+| `BTreeMap::remove` | — | 0.73% | new |
+| `BTreeMap::insert` | — | 0.34% | new |
+
+#### Key Findings
+
+- The kernel network stack dominates CPU usage (~40%), meaning userspace code is already highly efficient
+- The 2048-shard DashMap design shows no lock contention issues — hotkey test is actually faster than random keys due to better CPU cache locality
+- TTL overhead comes primarily from Mutex contention and `clock_gettime` calls, not from BTreeMap operations themselves
+- Double hashing (manual shard selection + DashMap internal hash) has negligible overhead — `shard_index` doesn't even appear in the top 50 functions
+
 ### Key Takeaways
 
 - Normal mode achieves ~130K+ QPS for SET/GET with 50 clients

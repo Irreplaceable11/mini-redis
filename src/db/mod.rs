@@ -6,8 +6,8 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use std::collections::{BTreeMap, VecDeque};
 
-use ahash::AHasher;
-use std::hash::{Hash, Hasher};
+use ahash::{AHasher, RandomState};
+use std::hash::{BuildHasher, Hash, Hasher};
 use std::ops::ControlFlow;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
@@ -79,6 +79,7 @@ impl Entry {
 }
 
 pub struct Db {
+    hash_builder: RandomState,
     pub(crate) shards: Vec<DashMap<Bytes, Entry>>,
     /// 选择 BTreeMap<(Instant, Bytes), ()> 多个 key 可能有相同的过期时间
     pub(crate) expiry_indices: Vec<Mutex<BTreeMap<(Instant, Bytes), ()>>>,
@@ -98,6 +99,7 @@ impl Db {
             expiry_indices.push(Mutex::new(BTreeMap::new()));
         }
         Db {
+            hash_builder: RandomState::new(),
             shards,
             expiry_indices,
             shard_count,
@@ -106,7 +108,7 @@ impl Db {
     }
 
     pub(crate) fn shard_index(&self, key: &Bytes) -> usize {
-        let mut hasher = AHasher::default();
+        let mut hasher = self.hash_builder.build_hasher();
         key.hash(&mut hasher);
         hasher.finish() as usize & (self.shard_count - 1)
     }

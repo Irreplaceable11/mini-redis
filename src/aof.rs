@@ -38,6 +38,15 @@ pub enum AofEntry {
     Expire(Bytes, Option<i64>),
 
     Push(Bytes, Vec<Bytes>, bool),
+
+    // key, count, value
+    Pop(Bytes, bool),
+
+    // key, count, value
+    Lrem(Bytes, isize, Bytes),
+
+    // key, index, value
+    Lset(Bytes, isize, Bytes),
 }
 
 impl AofEntry {
@@ -298,6 +307,15 @@ impl Aof {
                         }
                         AofEntry::Push(k, values, is_left) => {
                             let _ = ctx.db().push(k, values, is_left);
+                        }
+                        AofEntry::Pop(k, is_left) => {
+                            let _ = ctx.db().pop(&k, is_left);
+                        }
+                        AofEntry::Lrem(k, count, value) => {
+                            let _ = ctx.db().lrem(&k, count, value);
+                        }
+                        AofEntry::Lset(k, index, value) => {
+                            let _ = ctx.db().lset(&k, index, value);
                         }
                     }
                 }

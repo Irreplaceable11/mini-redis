@@ -7,7 +7,6 @@ use std::time::Instant;
 
 use super::{Db, Entry, EntryValue};
 
-const WRONGTYPE_ERR: &str = "WRONGTYPE Operation against a key holding the wrong kind of value";
 
 impl Db {
     pub fn get(&self, key: &Bytes) -> Result<Option<Bytes>, &'static str> {

@@ -169,6 +169,50 @@ redis-benchmark -h 127.0.0.1 -p 6377 -c 500 -n 1000000 -t set,get -P 64
 | SET | 3,278,688/s |
 | GET | 5,494,505/s |
 
+### 性能剖析（火焰图分析）
+
+使用 `perf` + `inferno` 火焰图工具，在 500 并发、pipeline 64、200 万请求条件下采集。
+
+#### 场景对比
+
+| 场景 | 吞吐量 | 对比基线 |
+|------|--------|---------|
+| SET（无 TTL） | 1,919,385/s | 基线 |
+| GET（无 TTL） | 5,128,205/s | 基线 |
+| SET 带 TTL（EX 5） | 1,196,172/s | -37.5% |
+| SET 热点 key（单 key） | 2,066,115/s | +7.8% |
+
+#### CPU 热点分布（基线：SET/GET 无 TTL）
+
+| 函数 | CPU 占比 | 分类 |
+|------|---------|------|
+| 内核态（epoll/futex/网络栈） | ~40% | 系统调用 |
+| `bytes_mut::shared_v_drop` | 2.81% | Bytes 引用计数 |
+| `Mutex::lock_contended` | 2.78% | 锁竞争 |
+| `bytes_mut::shared_v_clone` | 2.22% | Bytes 引用计数 |
+| `Db::set` | 2.21% | 核心 SET 逻辑 |
+| `syscall` | 1.64% | 系统调用 |
+| `Command::from_frame` | 1.49% | RESP 协议解析 |
+| `handle_connection` | 1.42% | 连接处理 |
+| `DashMap::_entry` | 1.20% | DashMap entry API |
+| `Connection::find_crlf` | 1.06% | 帧解析 |
+
+#### TTL 场景：额外开销
+
+| 函数 | 基线 | 带 TTL | 变化 |
+|------|------|--------|------|
+| `Mutex::lock_contended` | 2.78% | 3.43% | +0.65% |
+| `__vdso_clock_gettime` | 0.35% | 1.03% | +0.68% |
+| `BTreeMap::remove` | — | 0.73% | 新增 |
+| `BTreeMap::insert` | — | 0.34% | 新增 |
+
+#### 关键发现
+
+- 内核网络栈占据了约 40% 的 CPU 时间，说明用户态代码已经非常高效
+- 2048 分片 DashMap 设计没有锁竞争问题 — 热点 key 测试反而比随机 key 更快，得益于更好的 CPU 缓存局部性
+- TTL 开销主要来自 Mutex 争用和 `clock_gettime` 调用，而非 BTreeMap 操作本身
+- 双重 hash（手动分片选择 + DashMap 内部 hash）开销可忽略 — `shard_index` 甚至未出现在 top 50 函数中
+
 ### 核心结论
 
 - 普通模式下 50 并发可达 13 万+ QPS
