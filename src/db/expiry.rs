@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use rand::RngExt;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tracing::info;
@@ -6,6 +7,11 @@ use tracing::info;
 use super::Db;
 
 const CLEANUP_BATCH_SIZE: usize = 256;
+
+/// 随机采样清理参数
+const SAMPLE_PER_SHARD: usize = 20;       // 每个 shard 采样数
+const EXPIRE_RATIO_THRESHOLD: f64 = 0.25; // 过期比例阈值，超过则继续清理
+const MAX_CLEANUP_ROUNDS: usize = 16;     // 单次 clean_up 最大轮数，防止长时间阻塞
 
 impl Db {
     pub fn del(&self, keys: Vec<Bytes>) -> usize {
@@ -108,29 +114,95 @@ impl Db {
         }
     }
 
-    pub fn clean_up(&self) {
-        let start = self
-            .next_shard_index
-            .fetch_add(CLEANUP_BATCH_SIZE, Ordering::Relaxed);
-        let total = self.shards.len();
-        let now = Instant::now();
-        let mut total_cleaned = 0usize;
-        for i in 0..CLEANUP_BATCH_SIZE {
-            let shard_idx = (start + i) % total;
-            let mut guard = self.expiry_indices[shard_idx].lock().unwrap();
-            // split_off 返回 >= 边界的部分，留下 < 边界的部分
-            let remaining = guard.split_off(&(now, Bytes::new()));
-            // guard 里现在是所有 < now 的条目（即过期的）
-            let expired = std::mem::replace(&mut *guard, remaining);
-            drop(guard);
+    /// [旧方案] 基于 BTreeMap 索引的精确清理
+    // pub fn clean_up(&self) {
+    //     let start = self
+    //         .next_shard_index
+    //         .fetch_add(CLEANUP_BATCH_SIZE, Ordering::Relaxed);
+    //     let total = self.shards.len();
+    //     let now = Instant::now();
+    //     let mut total_cleaned = 0usize;
+    //     for i in 0..CLEANUP_BATCH_SIZE {
+    //         let shard_idx = (start + i) % total;
+    //         let mut guard = self.expiry_indices[shard_idx].lock().unwrap();
+    //         // split_off 返回 >= 边界的部分，留下 < 边界的部分
+    //         let remaining = guard.split_off(&(now, Bytes::new()));
+    //         // guard 里现在是所有 < now 的条目（即过期的）
+    //         let expired = std::mem::replace(&mut *guard, remaining);
+    //         drop(guard);
+    //
+    //         total_cleaned += expired.len();
+    //         for ((_, key), _) in expired {
+    //             self.shards[shard_idx].remove(&key);
+    //         }
+    //     }
+    //     let shard_start = start % total;
+    //     let shard_end = (start + CLEANUP_BATCH_SIZE - 1) % total;
+    //     info!(cleaned = total_cleaned, shards = %format!("{}-{}", shard_start, shard_end), "过期 key 清理完成");
+    // }
 
-            total_cleaned += expired.len();
-            for ((_, key), _) in expired {
-                self.shards[shard_idx].remove(&key);
+    /// [新方案] 随机采样 + 自适应循环清理
+    /// 类似 Redis 的 activeExpireCycle：
+    /// 1. 随机选 shard，从中采样若干 key
+    /// 2. 删除已过期的
+    /// 3. 如果过期比例 > 25%，继续下一轮
+    /// 4. 达到最大轮数或过期比例低于阈值时停止
+    pub fn clean_up(&self) {
+        let total_shards = self.shards.len();
+        let mut rng = rand::rng();
+        let mut total_sampled = 0usize;
+        let mut total_cleaned = 0usize;
+        let now = Instant::now();
+
+        for _round in 0..MAX_CLEANUP_ROUNDS {
+            let mut round_sampled = 0usize;
+            let mut round_expired = 0usize;
+
+            // 每轮随机选几个 shard 进行采样
+            for _ in 0..4 {
+                let shard_idx = rng.random_range(0..total_shards);
+                let shard = &self.shards[shard_idx];
+
+                // 从 shard 中采样有 TTL 的 key
+                let mut sampled = 0;
+                let mut expired_keys: Vec<Bytes> = Vec::new();
+
+                for entry in shard.iter() {
+                    if sampled >= SAMPLE_PER_SHARD {
+                        break;
+                    }
+                    if let Some(ttl) = entry.ttl {
+                        sampled += 1;
+                        if now > ttl {
+                            expired_keys.push(entry.key().clone());
+                        }
+                    }
+                }
+
+                round_sampled += sampled;
+                round_expired += expired_keys.len();
+
+                // 删除过期 key
+                for key in expired_keys {
+                    shard.remove(&key);
+                }
+            }
+
+            total_sampled += round_sampled;
+            total_cleaned += round_expired;
+
+            // 如果采样数为 0（没有带 TTL 的 key）或过期比例低于阈值，停止
+            if round_sampled == 0 {
+                break;
+            }
+            let ratio = round_expired as f64 / round_sampled as f64;
+            if ratio < EXPIRE_RATIO_THRESHOLD {
+                break;
             }
         }
-        let shard_start = start % total;
-        let shard_end = (start + CLEANUP_BATCH_SIZE - 1) % total;
-        info!(cleaned = total_cleaned, shards = %format!("{}-{}", shard_start, shard_end), "过期 key 清理完成");
+
+        if total_cleaned > 0 {
+            info!(cleaned = total_cleaned, sampled = total_sampled, "随机采样过期清理完成");
+        }
     }
 }

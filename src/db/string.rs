@@ -32,22 +32,24 @@ impl Db {
     ) -> Option<()> {
         let idx = self.shard_index(&key);
         let shard = &self.shards[idx];
-        let mut guard = self.expiry_indices[idx].lock().unwrap();
-        let clone_key = key.clone();
+        // [旧方案] BTreeMap 索引 —— 注释保留用于对比
+        // let mut guard = self.expiry_indices[idx].lock().unwrap();
+
+        //let clone_key = key.clone();
         // 无条件写入，快速路径
         if !nx && !xx {
 
-            let old_value = shard.insert(key.clone(), Entry::new(value, ttl));
+            let _old_value = shard.insert(key.clone(), Entry::new(value, ttl));
 
-            //清理旧的索引条目
-            if let Some(old_value) = old_value {
-                if let Some(ttl) = old_value.ttl {
-                    guard.remove(&(ttl, key.clone()));
-                }
-            }
-            if let Some(instant) = ttl {
-                guard.insert((instant, key.clone()), ());
-            }
+            // [旧方案] 清理旧的索引条目
+            // if let Some(old_value) = _old_value {
+            //     if let Some(ttl) = old_value.ttl {
+            //         guard.remove(&(ttl, key.clone()));
+            //     }
+            // }
+            // if let Some(instant) = ttl {
+            //     guard.insert((instant, key.clone()), ());
+            // }
 
             return Some(());
         }
@@ -62,21 +64,23 @@ impl Db {
                 }
                 if xx && !exists {
                     // XX: key 已过期（等同于不存在），不写入，顺便清理
-                    let entry = occupied.remove();
-                    if let Some(ttl) = entry.ttl {
-                        guard.remove(&(ttl, clone_key));
-                    }
+                    let _entry = occupied.remove();
+                    // [旧方案]
+                    // if let Some(ttl) = _entry.ttl {
+                    //     guard.remove(&(ttl, clone_key));
+                    // }
                     return None;
                 }
                 // NX 且已过期 → 视为不存在，允许写入
                 // XX 且未过期 → key 存在，允许写入
-                let old_val = occupied.insert(Entry::new(value, ttl));
-                if let Some(old_ttl) = old_val.ttl {
-                    guard.remove(&(old_ttl, clone_key.clone()));
-                }
-                if let Some(instant) = ttl {
-                    guard.insert((instant, clone_key), ());
-                }
+                let _old_val = occupied.insert(Entry::new(value, ttl));
+                // [旧方案]
+                // if let Some(old_ttl) = _old_val.ttl {
+                //     guard.remove(&(old_ttl, clone_key.clone()));
+                // }
+                // if let Some(instant) = ttl {
+                //     guard.insert((instant, clone_key), ());
+                // }
                 Some(())
             }
             DashEntry::Vacant(vacant) => {
@@ -86,9 +90,10 @@ impl Db {
                 }
                 // NX: key 不存在，写入
                 vacant.insert(Entry::new(value, ttl));
-                if let Some(instant) = ttl {
-                    guard.insert((instant, clone_key), ());
-                }
+                // [旧方案]
+                // if let Some(instant) = ttl {
+                //     guard.insert((instant, clone_key), ());
+                // }
                 Some(())
             }
         }
@@ -100,7 +105,7 @@ impl Db {
         let shard = &self.shards[idx];
 
         let mut result: Result<i64, &'static str> = Ok(0);
-        let mut guard = self.expiry_indices[idx].lock().unwrap();
+        // [旧方案] let mut guard = self.expiry_indices[idx].lock().unwrap();
 
         shard.entry(key.clone())
             .and_modify(|entry| {
@@ -109,9 +114,10 @@ impl Db {
                     let mut buffer = itoa::Buffer::new();
                     let printed = buffer.format(delta);
                     entry.value = EntryValue::String(Bytes::copy_from_slice(printed.as_bytes()));
-                    if let Some(ttl) = entry.ttl {
-                        guard.remove(&(ttl, key.clone()));
-                    }
+                    // [旧方案]
+                    // if let Some(ttl) = entry.ttl {
+                    //     guard.remove(&(ttl, key.clone()));
+                    // }
                     entry.ttl = None;
                     return;
                 }
@@ -155,7 +161,7 @@ impl Db {
         let mut result: Result<Bytes, &'static str> = Ok(Bytes::new());
         let mut buffer = [b'0'; lexical_core::BUFFER_SIZE];
 
-        let mut guard = self.expiry_indices[idx].lock().unwrap();
+        // [旧方案] let mut guard = self.expiry_indices[idx].lock().unwrap();
 
         shard.entry(key.clone())
             .and_modify(|entry| {
@@ -163,9 +169,10 @@ impl Db {
                     let s = lexical_core::write(delta, &mut buffer);
                     let val = Bytes::copy_from_slice(s);
                     entry.value = EntryValue::String(val.clone());
-                    if let Some(ttl) = entry.ttl {
-                        guard.remove(&(ttl, key.clone()));
-                    }
+                    // [旧方案]
+                    // if let Some(ttl) = entry.ttl {
+                    //     guard.remove(&(ttl, key.clone()));
+                    // }
                     entry.ttl = None;
                     result = Ok(val);
                     return;
