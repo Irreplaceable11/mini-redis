@@ -23,6 +23,15 @@ mod lrange;
 mod lindex;
 mod lrem;
 mod lset;
+pub mod scan;
+mod info;
+mod dbsize;
+mod command_cmd;
+mod config;
+mod type_cmd;
+mod select;
+mod client;
+mod hello;
 
 use crate::aof::AofEntry;
 use crate::frame::Frame;
@@ -64,6 +73,15 @@ pub enum Command {
     Subscribe(subscribe::Subscribe),
     Unsubscribe(unsubscribe::Unsubscribe),
     BgRewriteAof(bgrewriteaof::BgRewriteAof),
+    Scan(scan::Scan),
+    Info(info::Info),
+    DbSize(dbsize::DbSize),
+    CommandCmd(command_cmd::CommandCmd),
+    Config(config::Config),
+    Type(type_cmd::TypeCmd),
+    Select(select::Select),
+    Client(client::Client),
+    Hello(hello::Hello),
     Unknown(String),
 }
 
@@ -91,6 +109,14 @@ impl Command {
             Command::Lset(cmd)  => cmd.execute(ctx),
             Command::Publish(cmd)  => cmd.execute(ctx),
             Command::BgRewriteAof(cmd) => cmd.execute(ctx),
+            Command::Info(cmd) => cmd.execute(ctx),
+            Command::DbSize(cmd) => cmd.execute(ctx),
+            Command::CommandCmd(cmd) => cmd.execute(ctx),
+            Command::Config(cmd) => cmd.execute(ctx),
+            Command::Type(cmd) => cmd.execute(ctx),
+            Command::Select(cmd) => cmd.execute(ctx),
+            Command::Client(cmd) => cmd.execute(ctx),
+            Command::Hello(cmd) => cmd.execute(ctx),
             Command::Unknown(cmd) => (Frame::Error(Bytes::from(format!("Command failed, unknown command:{:?}", cmd))), None),
             _ => (Frame::Error(Bytes::from("ERR command not implemented".to_string())), None),
         }
@@ -135,6 +161,15 @@ impl Command {
             b"LINDEX" => Ok(Command::Lindex(lindex::Lindex::parse(&arg)?)),
             b"LREM" => Ok(Command::Lrem(lrem::Lrem::parse(&arg)?)),
             b"LSET" => Ok(Command::Lset(lset::Lset::parse(&arg)?)),
+            b"SCAN" => Ok(Command::Scan(scan::Scan::parse(&arg)?)),
+            b"INFO" => Ok(Command::Info(info::Info::parse(&arg)?)),
+            b"DBSIZE" => Ok(Command::DbSize(dbsize::DbSize::parse(&arg)?)),
+            b"COMMAND" => Ok(Command::CommandCmd(command_cmd::CommandCmd::parse(&arg)?)),
+            b"CONFIG" => Ok(Command::Config(config::Config::parse(&arg)?)),
+            b"TYPE" => Ok(Command::Type(type_cmd::TypeCmd::parse(&arg)?)),
+            b"SELECT" => Ok(Command::Select(select::Select::parse(&arg)?)),
+            b"CLIENT" => Ok(Command::Client(client::Client::parse(&arg)?)),
+            b"HELLO" => Ok(Command::Hello(hello::Hello::parse(&arg)?)),
             _ => {
                 let cmd_name_string = str::from_utf8(cmd_name)?;
                 info!("unknown command: {}", cmd_name_string);

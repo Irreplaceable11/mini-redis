@@ -231,4 +231,36 @@ impl Db {
         .await
         .unwrap_or_default()
     }
+
+    pub fn scan(self: &Arc<Db>, pattern: Option<&str>, mut cursor: u64, count: Option<u64>) -> (u64, Vec<Bytes>) {
+        let count = count.unwrap_or(10);
+        let pattern = pattern.unwrap_or("*");
+        let mut result = Vec::new();
+        for shard in &self.shards[cursor as usize..] {
+            cursor += 1;
+            result.extend(
+                shard.iter()
+                    .filter_map(|ref_multi| {
+                        let entry = ref_multi.value();
+                        if !entry.is_expired() {
+                            Some(ref_multi.key().clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .filter(|k| {
+                        std::str::from_utf8(k).map_or(false, |s| glob_match(&pattern, s))
+                    })
+            );
+            if cursor == self.shard_count as u64 {
+                cursor = 0;
+                break;
+            }
+            //满足或大于count 结束循环
+            if result.len() >= count as usize {
+                break;
+            }
+        }
+        (cursor, result)
+    }
 }

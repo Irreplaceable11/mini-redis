@@ -42,6 +42,12 @@ pub async fn handle_connection(socket: TcpStream, context: Arc<Context>) -> Resu
                         conn.encode_to_buffer(&resp)?;
                         continue;
                     }
+                    // Scan 命令需要 async 执行（内部用了 spawn_blocking）
+                    if let Command::Scan(scan) = cmd {
+                        let resp = scan.execute(&context).await;
+                        conn.encode_to_buffer(&resp)?;
+                        continue;
+                    }
                     let (resp, aof_entry) = Command::execute(cmd, &context);
                     if let Some(entry) = aof_entry {
                         aof_entry_vec.push(entry);
