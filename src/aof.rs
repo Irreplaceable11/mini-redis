@@ -47,6 +47,9 @@ pub enum AofEntry {
 
     // key, index, value
     Lset(Bytes, isize, Bytes),
+
+    // key, is_before, pivot, value
+    Linsert(Bytes, bool, Bytes, Bytes),
 }
 
 impl AofEntry {
@@ -316,6 +319,9 @@ impl Aof {
                         }
                         AofEntry::Lset(k, index, value) => {
                             let _ = ctx.db().lset(&k, index, value);
+                        }
+                        AofEntry::Linsert(k, is_before, pivot, value) => {
+                            let _ = ctx.db().linsert(&k, is_before, &pivot, value);
                         }
                     }
                 }

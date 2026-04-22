@@ -1,9 +1,11 @@
+use std::time::Duration;
 use std::{cmp::max, collections::VecDeque};
 use std::cmp::min;
 use crate::db::{Db, Entry};
 use anyhow::Result;
 use bytes::Bytes;
 use tokio::sync::oneshot;
+use futures::future::select_all;
 
 impl Db {
     pub fn push(&self, key: Bytes, values: Vec<Bytes>, is_left: bool) -> Result<i64, &'static str> {
@@ -13,10 +15,13 @@ impl Db {
         let mut result: std::result::Result<i64, &'static str> = Ok(0);
  
         shard
-            .entry(key)
+            .entry(key.clone())
             .and_modify(|entry| match entry.value.as_list_mut() {
                 Ok(list) => {
                     for ele in &values {
+                        if self.try_notify_waiter(&key, ele) {
+                            continue;
+                        }
                         if is_left {
                             list.push_front(ele.clone());
                         } else {
@@ -30,6 +35,9 @@ impl Db {
             .or_insert_with(|| {
                 let mut new_vec_deque = VecDeque::new();
                 for ele in values {
+                    if self.try_notify_waiter(&key, &ele) {
+                            continue;
+                    }
                     if is_left {
                         new_vec_deque.push_front(ele);
                     } else {
@@ -260,9 +268,55 @@ impl Db {
         }
     }
 
-    pub fn bpop(&self, key: Vec<Bytes>, timeout: u64, is_left: bool) -> Result<Bytes, &'static str> {
-        //
-        todo!()
+    pub async fn bpop(&self, keys: Vec<Bytes>, timeout: u64, is_left: bool) -> Result<Vec<Bytes>, &'static str> {
+
+        for key in &keys {
+            let idx = self.shard_index(key);
+            let shard = &self.shards[idx];
+            match shard.get_mut(key) {
+                Some(mut entry) => {
+                    match entry.value.as_list_mut() {
+                        Ok(list) => {
+                            let mut pop_val = None;
+                            if is_left {
+                                pop_val = list.pop_front();
+                            } else {
+                                pop_val = list.pop_back();
+                            }
+                            if pop_val.is_some() {
+                                return Ok(vec![key.clone(), pop_val.unwrap_or(Bytes::new())])
+                            }
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+                None => {}
+            }
+        }
+        // 为每个 key 注册 waiter，收集成 future 列表
+        let futures: Vec<_> = keys.iter().map(|key| {
+            self.register_waiter(key)
+        }).collect();
+
+        if futures.is_empty() {
+            return Ok(vec![]);
+        }
+ 
+        // 所有 key 同时等待，整体共享一个 timeout
+        match tokio::time::timeout(Duration::from_secs(timeout), select_all(futures)).await {
+            Ok((Ok((key, value)), _index, _remaining)) => {
+                // 某个 key 有数据了，返回 [key, value]
+                Ok(vec![key, value])
+            }
+            Ok((Err(_), _, _)) => {
+                // sender 被 drop 了，没拿到数据
+                Ok(vec![])
+            }
+            Err(_) => {
+                // 超时，所有 key 都没数据
+                Ok(vec![])
+            }
+        }
     }
 
     /// 注册一个 waiter，返回 receiver

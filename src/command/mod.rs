@@ -33,6 +33,7 @@ mod select;
 mod client;
 mod hello;
 mod linsert;
+pub mod bpop;
 
 use crate::aof::AofEntry;
 use crate::frame::Frame;
@@ -70,6 +71,7 @@ pub enum Command {
     Lindex(lindex::Lindex),
     Lrem(lrem::Lrem),
     Lset(lset::Lset),
+    Linsert(linsert::Linsert),
     Publish(publish::Publish),
     Subscribe(subscribe::Subscribe),
     Unsubscribe(unsubscribe::Unsubscribe),
@@ -83,6 +85,7 @@ pub enum Command {
     Select(select::Select),
     Client(client::Client),
     Hello(hello::Hello),
+    BPop(bpop::BPop),
     Unknown(String),
 }
 
@@ -108,6 +111,7 @@ impl Command {
             Command::Lindex(cmd)  => cmd.execute(ctx),
             Command::Lrem(cmd)  => cmd.execute(ctx),
             Command::Lset(cmd)  => cmd.execute(ctx),
+            Command::Linsert(cmd) => cmd.execute(ctx),
             Command::Publish(cmd)  => cmd.execute(ctx),
             Command::BgRewriteAof(cmd) => cmd.execute(ctx),
             Command::Info(cmd) => cmd.execute(ctx),
@@ -118,6 +122,7 @@ impl Command {
             Command::Select(cmd) => cmd.execute(ctx),
             Command::Client(cmd) => cmd.execute(ctx),
             Command::Hello(cmd) => cmd.execute(ctx),
+            Command::BPop(_) => (Frame::Error(Bytes::from("ERR bpop should be handled async")), None),
             Command::Unknown(cmd) => (Frame::Error(Bytes::from(format!("Command failed, unknown command:{:?}", cmd))), None),
             _ => (Frame::Error(Bytes::from("ERR command not implemented".to_string())), None),
         }
@@ -162,6 +167,9 @@ impl Command {
             b"LINDEX" => Ok(Command::Lindex(lindex::Lindex::parse(&arg)?)),
             b"LREM" => Ok(Command::Lrem(lrem::Lrem::parse(&arg)?)),
             b"LSET" => Ok(Command::Lset(lset::Lset::parse(&arg)?)),
+            b"LINSERT" => Ok(Command::Linsert(linsert::Linsert::parse(&arg)?)),
+            b"BLPOP" => Ok(Command::BPop(bpop::BPop::parse(&arg, true)?)),
+            b"BRPOP" => Ok(Command::BPop(bpop::BPop::parse(&arg, false)?)),
             b"SCAN" => Ok(Command::Scan(scan::Scan::parse(&arg)?)),
             b"INFO" => Ok(Command::Info(info::Info::parse(&arg)?)),
             b"DBSIZE" => Ok(Command::DbSize(dbsize::DbSize::parse(&arg)?)),

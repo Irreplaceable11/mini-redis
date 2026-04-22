@@ -48,6 +48,16 @@ pub async fn handle_connection(socket: TcpStream, context: Arc<Context>) -> Resu
                         conn.encode_to_buffer(&resp)?;
                         continue;
                     }
+                    // BPop 命令需要 async 执行（阻塞等待数据）
+                    if let Command::BPop(bpop) = cmd {
+                        // blpop 可能阻塞，先把之前积攒的 aof 和响应刷出去
+                        context.aof_send_batch(std::mem::take(&mut aof_entry_vec)).await?;
+                        conn.write_and_flush().await?;
+                        let resp = bpop.execute(&context).await;
+                        conn.encode_to_buffer(&resp)?;
+                        conn.write_and_flush().await?;
+                        continue;
+                    }
                     let (resp, aof_entry) = Command::execute(cmd, &context);
                     if let Some(entry) = aof_entry {
                         aof_entry_vec.push(entry);
