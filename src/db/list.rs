@@ -3,6 +3,7 @@ use std::cmp::min;
 use crate::db::{Db, Entry};
 use anyhow::Result;
 use bytes::Bytes;
+use tokio::sync::oneshot;
 
 impl Db {
     pub fn push(&self, key: Bytes, values: Vec<Bytes>, is_left: bool) -> Result<i64, &'static str> {
@@ -230,5 +231,58 @@ impl Db {
         }
         result
     }
-    //TODO LINSERT key BEFORE|AFTER pivot value
+
+    pub fn linsert(&self, key: &Bytes, is_before: bool, pivot: &Bytes, value: Bytes) -> Result<i64, &'static str> {
+        let idx = self.shard_index(key);
+        let shard = &self.shards[idx];
+        
+        match shard.get_mut(key) {
+            Some(mut entry) => {
+                match entry.value.as_list_mut(){
+                    Ok(list) => {
+                        if let Some(index) = list.iter().position(|item| item == pivot) {
+                            if is_before {
+                                list.insert(index, value);
+                            } else {
+                                list.insert(index + 1, value);
+                            }
+                           Ok(list.len() as i64)
+                        } else {
+                            //pivot 不存在 -1
+                           Ok(-1)
+                        }
+                    }
+                    Err(e) =>  Err(e),
+                }
+
+            }
+            None =>  Ok(0)
+        }
+    }
+
+    pub fn bpop(&self, key: Vec<Bytes>, timeout: u64, is_left: bool) -> Result<Bytes, &'static str> {
+        //
+        todo!()
+    }
+
+    /// 注册一个 waiter，返回 receiver
+    fn register_waiter(&self, key: &Bytes) -> oneshot::Receiver<(Bytes, Bytes)> {
+        let (tx, rx) = oneshot::channel();
+        let mut entry = self.waiters
+            .entry(key.clone())
+            .or_insert_with(VecDeque::new);
+
+        entry.push_front(tx);
+        rx
+    }
+
+    /// LPUSH 时调用：检查有没有 waiter，有就直接发数据，返回 true；没有返回 false
+    fn try_notify_waiter(&self, key: &Bytes, value: &Bytes) -> bool {
+        self.waiters.get_mut(key)
+            .map_or(false, |mut waiters| {
+                waiters.pop_back().map_or(false, |tx| {
+                    tx.send((key.clone(), value.clone())).is_ok()
+                })
+            })
+    }
 }

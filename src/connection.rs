@@ -92,9 +92,9 @@ impl Connection {
     fn check_frame_complete_inner(&self, cursor: &mut Cursor<&[u8]>) -> Result<Option<usize>> {
         let type_byte = self.peek_u8(cursor)?;
         match type_byte {
-            b'+' | b'-' | b':' => self.check_simple_type(cursor),
-            b'$' => self.check_bulk_string(cursor),
             b'*' => self.check_array(cursor),
+            b'$' => self.check_bulk_string(cursor),
+            b'+' | b'-' | b':' => self.check_simple_type(cursor),
             _ => Err(anyhow::anyhow!("Unexpected frame type: {}", type_byte)),
         }
     }

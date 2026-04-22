@@ -46,4 +46,4 @@ rand = "0.10.1"
 opt-level = 3
 lto = "thin"       # 链接时优化
 codegen-units = 1  # 更好的优化，编译慢但运行快
-debug = 1          # 保留函数名，火焰图需要
+#debug = 1          # 保留函数名，火焰图需要

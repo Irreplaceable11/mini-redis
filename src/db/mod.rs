@@ -4,12 +4,12 @@ mod list;
 
 use bytes::Bytes;
 use dashmap::DashMap;
+use tokio::sync::oneshot;
 use std::collections::{BTreeMap, VecDeque};
 
-use ahash::{AHasher, RandomState};
+use ahash::RandomState;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::ops::ControlFlow;
-use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -84,7 +84,7 @@ pub struct Db {
     /// 选择 BTreeMap<(Instant, Bytes), ()> 多个 key 可能有相同的过期时间
     pub(crate) expiry_indices: Vec<Mutex<BTreeMap<(Instant, Bytes), ()>>>,
     pub(crate) shard_count: usize,
-    pub(crate) next_shard_index: AtomicUsize,
+    pub(crate) waiters: DashMap<Bytes, VecDeque<oneshot::Sender<(Bytes, Bytes)>>>
 }
 
 impl Db {
@@ -103,7 +103,7 @@ impl Db {
             shards,
             expiry_indices,
             shard_count,
-            next_shard_index: AtomicUsize::new(0),
+            waiters: DashMap::with_capacity(2048)
         }
     }
 

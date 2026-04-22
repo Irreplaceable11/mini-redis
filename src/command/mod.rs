@@ -32,6 +32,7 @@ mod type_cmd;
 mod select;
 mod client;
 mod hello;
+mod linsert;
 
 use crate::aof::AofEntry;
 use crate::frame::Frame;

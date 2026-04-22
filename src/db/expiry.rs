@@ -1,12 +1,10 @@
 use bytes::Bytes;
 use rand::RngExt;
-use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tracing::info;
 
 use super::Db;
 
-const CLEANUP_BATCH_SIZE: usize = 256;
 
 /// 随机采样清理参数
 const SAMPLE_PER_SHARD: usize = 20;       // 每个 shard 采样数
@@ -113,33 +111,6 @@ impl Db {
             }
         }
     }
-
-    /// [旧方案] 基于 BTreeMap 索引的精确清理
-    // pub fn clean_up(&self) {
-    //     let start = self
-    //         .next_shard_index
-    //         .fetch_add(CLEANUP_BATCH_SIZE, Ordering::Relaxed);
-    //     let total = self.shards.len();
-    //     let now = Instant::now();
-    //     let mut total_cleaned = 0usize;
-    //     for i in 0..CLEANUP_BATCH_SIZE {
-    //         let shard_idx = (start + i) % total;
-    //         let mut guard = self.expiry_indices[shard_idx].lock().unwrap();
-    //         // split_off 返回 >= 边界的部分，留下 < 边界的部分
-    //         let remaining = guard.split_off(&(now, Bytes::new()));
-    //         // guard 里现在是所有 < now 的条目（即过期的）
-    //         let expired = std::mem::replace(&mut *guard, remaining);
-    //         drop(guard);
-    //
-    //         total_cleaned += expired.len();
-    //         for ((_, key), _) in expired {
-    //             self.shards[shard_idx].remove(&key);
-    //         }
-    //     }
-    //     let shard_start = start % total;
-    //     let shard_end = (start + CLEANUP_BATCH_SIZE - 1) % total;
-    //     info!(cleaned = total_cleaned, shards = %format!("{}-{}", shard_start, shard_end), "过期 key 清理完成");
-    // }
 
     /// [新方案] 随机采样 + 自适应循环清理
     /// 类似 Redis 的 activeExpireCycle：
