@@ -33,6 +33,10 @@ mod select;
 mod client;
 mod hello;
 mod linsert;
+mod pushx;
+mod lpos;
+mod ltrim;
+mod lmove;
 pub mod bpop;
 
 use crate::aof::AofEntry;
@@ -72,6 +76,10 @@ pub enum Command {
     Lrem(lrem::Lrem),
     Lset(lset::Lset),
     Linsert(linsert::Linsert),
+    Pushx(pushx::Pushx),
+    Lpos(lpos::Lpos),
+    Ltrim(ltrim::Ltrim),
+    Lmove(lmove::Lmove),
     Publish(publish::Publish),
     Subscribe(subscribe::Subscribe),
     Unsubscribe(unsubscribe::Unsubscribe),
@@ -112,6 +120,10 @@ impl Command {
             Command::Lrem(cmd)  => cmd.execute(ctx),
             Command::Lset(cmd)  => cmd.execute(ctx),
             Command::Linsert(cmd) => cmd.execute(ctx),
+            Command::Pushx(cmd) => cmd.execute(ctx),
+            Command::Lpos(cmd) => cmd.execute(ctx),
+            Command::Ltrim(cmd) => cmd.execute(ctx),
+            Command::Lmove(cmd) => cmd.execute(ctx),
             Command::Publish(cmd)  => cmd.execute(ctx),
             Command::BgRewriteAof(cmd) => cmd.execute(ctx),
             Command::Info(cmd) => cmd.execute(ctx),
@@ -168,6 +180,11 @@ impl Command {
             b"LREM" => Ok(Command::Lrem(lrem::Lrem::parse(&arg)?)),
             b"LSET" => Ok(Command::Lset(lset::Lset::parse(&arg)?)),
             b"LINSERT" => Ok(Command::Linsert(linsert::Linsert::parse(&arg)?)),
+            b"LPUSHX" => Ok(Command::Pushx(pushx::Pushx::parse(&arg, true)?)),
+            b"RPUSHX" => Ok(Command::Pushx(pushx::Pushx::parse(&arg, false)?)),
+            b"LPOS" => Ok(Command::Lpos(lpos::Lpos::parse(&arg)?)),
+            b"LTRIM" => Ok(Command::Ltrim(ltrim::Ltrim::parse(&arg)?)),
+            b"LMOVE" => Ok(Command::Lmove(lmove::Lmove::parse(&arg)?)),
             b"BLPOP" => Ok(Command::BPop(bpop::BPop::parse(&arg, true)?)),
             b"BRPOP" => Ok(Command::BPop(bpop::BPop::parse(&arg, false)?)),
             b"SCAN" => Ok(Command::Scan(scan::Scan::parse(&arg)?)),

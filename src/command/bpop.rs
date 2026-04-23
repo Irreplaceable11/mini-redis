@@ -1,3 +1,4 @@
+use crate::aof::AofEntry;
 use crate::command::extract_bytes;
 use crate::frame::Frame;
 use anyhow::{anyhow, Result};
@@ -30,16 +31,17 @@ impl BPop {
         Ok(BPop { keys, timeout, is_left })
     }
 
-    /// async 执行，不走 CommandExecute trait
-    pub async fn execute(self, ctx: &Context) -> Frame {
+    /// async 执行，返回 (Frame, Option<AofEntry>)
+    pub async fn execute(self, ctx: &Context) -> (Frame, Option<AofEntry>) {
         match ctx.db().bpop(self.keys, self.timeout, self.is_left).await {
-            Ok(result) if result.is_empty() => Frame::Null,
+            Ok(result) if result.is_empty() => (Frame::Null, None),
             Ok(result) => {
-                // 返回 [key, value] 的数组
+                // result = [key, value]，pop 成功需要写 AOF
+                let aof = AofEntry::Pop(result[0].clone(), self.is_left);
                 let frames = result.into_iter().map(Frame::BulkString).collect();
-                Frame::Array(frames)
+                (Frame::Array(frames), Some(aof))
             }
-            Err(err) => Frame::Error(Bytes::from_static(err.as_bytes())),
+            Err(err) => (Frame::Error(Bytes::from_static(err.as_bytes())), None),
         }
     }
 }

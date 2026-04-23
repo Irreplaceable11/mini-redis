@@ -53,7 +53,10 @@ pub async fn handle_connection(socket: TcpStream, context: Arc<Context>) -> Resu
                         // blpop 可能阻塞，先把之前积攒的 aof 和响应刷出去
                         context.aof_send_batch(std::mem::take(&mut aof_entry_vec)).await?;
                         conn.write_and_flush().await?;
-                        let resp = bpop.execute(&context).await;
+                        let (resp, aof_entry) = bpop.execute(&context).await;
+                        if let Some(entry) = aof_entry {
+                            context.aof_send_batch(vec![entry]).await?;
+                        }
                         conn.encode_to_buffer(&resp)?;
                         conn.write_and_flush().await?;
                         continue;

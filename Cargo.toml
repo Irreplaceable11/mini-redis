@@ -31,6 +31,7 @@ chrono = "0.4"
 fast-glob = "1.0.1"
 # 线程安全的map, 类似java的ConcurrentHashMap 采用分段锁
 dashmap = { version = "6.1.0", features = ["raw-api"] }
+hashbrown = "0.14.5"
 ahash = "0.8.12"
 smallvec = "1"
 

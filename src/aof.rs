@@ -50,6 +50,12 @@ pub enum AofEntry {
 
     // key, is_before, pivot, value
     Linsert(Bytes, bool, Bytes, Bytes),
+
+    // key, start, stop
+    Ltrim(Bytes, i64, i64),
+
+    // source, destination, source_left, dest_left
+    Lmove(Bytes, Bytes, bool, bool),
 }
 
 impl AofEntry {
@@ -322,6 +328,12 @@ impl Aof {
                         }
                         AofEntry::Linsert(k, is_before, pivot, value) => {
                             let _ = ctx.db().linsert(&k, is_before, &pivot, value);
+                        }
+                        AofEntry::Ltrim(k, start, stop) => {
+                            let _ = ctx.db().trim(&k, start, stop);
+                        }
+                        AofEntry::Lmove(src, dst, src_left, dst_left) => {
+                            let _ = ctx.db().lmove(&src, &dst, src_left, dst_left);
                         }
                     }
                 }

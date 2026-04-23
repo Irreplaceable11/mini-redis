@@ -446,26 +446,83 @@ impl Db {
         }
     }
 
-    pub fn lmove(&self, source: &Bytes, destination: &Bytes, source_left: bool, dest_left: bool) -> Result<Option<Bytes>, &'static str> {
+    /// 从 RawTable 中的某个 key 对应的 list 里 pop 一个元素
+    fn raw_pop_from_list(
+        shard: &mut hashbrown::raw::RawTable<(Bytes, dashmap::SharedValue<Entry>)>,
+        hash: u64,
+        key: &Bytes,
+        from_left: bool,
+    ) -> Result<Option<Bytes>, &'static str> {
+        match shard.get_mut(hash, |(k, _)| k == key) {
+            Some((_, v)) => {
+                let list = v.get_mut().value.as_list_mut()?;
+                Ok(if from_left { list.pop_front() } else { list.pop_back() })
+            }
+            None => Ok(None),
+        }
+    }
 
+    /// 向 RawTable 中的某个 key 对应的 list push 一个元素，如果 key 不存在则创建新列表
+    fn raw_push_to_list(
+        shard: &mut hashbrown::raw::RawTable<(Bytes, dashmap::SharedValue<Entry>)>,
+        hash: u64,
+        key: &Bytes,
+        value: Bytes,
+        to_left: bool,
+        hash_fn: impl Fn(&Bytes) -> u64,
+    ) -> Result<(), &'static str> {
+        match shard.get_mut(hash, |(k, _)| k == key) {
+            Some((_, v)) => {
+                let list = v.get_mut().value.as_list_mut()?;
+                if to_left { list.push_front(value); } else { list.push_back(value); }
+            }
+            None => {
+                let mut deque = VecDeque::new();
+                if to_left { deque.push_front(value); } else { deque.push_back(value); }
+                let entry = Entry::new(deque, None);
+                shard.insert(hash, (key.clone(), dashmap::SharedValue::new(entry)), |(k, _)| hash_fn(k));
+            }
+        }
+        Ok(())
+    }
+
+    /// 拿到两个 shard 的写锁后，执行 pop + push 的核心逻辑
+    fn raw_move_between_shards(
+        src_shard: &mut hashbrown::raw::RawTable<(Bytes, dashmap::SharedValue<Entry>)>,
+        dst_shard: &mut hashbrown::raw::RawTable<(Bytes, dashmap::SharedValue<Entry>)>,
+        src_hash: u64,
+        dst_hash: u64,
+        source: &Bytes,
+        destination: &Bytes,
+        source_left: bool,
+        dest_left: bool,
+        hash_fn: impl Fn(&Bytes) -> u64,
+    ) -> Result<Option<Bytes>, &'static str> {
+        let value = match Self::raw_pop_from_list(src_shard, src_hash, source, source_left)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        Self::raw_push_to_list(dst_shard, dst_hash, destination, value.clone(), dest_left, hash_fn)?;
+        Ok(Some(value))
+    }
+
+    pub fn lmove(&self, source: &Bytes, destination: &Bytes, source_left: bool, dest_left: bool) -> Result<Option<Bytes>, &'static str> {
         let src_outer = self.shard_index(source);
         let dst_outer = self.shard_index(destination);
         let src_map = &self.shards[src_outer];
         let dst_map = &self.shards[dst_outer];
 
-        let mut result: std::result::Result<Option<Bytes>, &'static str> = Ok(None);
-
         if source == destination {
             // 情况1：同 key，get_mut 一次搞定
             match src_map.get_mut(source) {
-                None => return Ok(None),
+                None => Ok(None),
                 Some(mut entry) => {
                     let list = entry.value.as_list_mut()?;
                     let val = if source_left { list.pop_front() } else { list.pop_back() };
                     if let Some(v) = &val {
                         if dest_left { list.push_front(v.clone()); } else { list.push_back(v.clone()); }
                     }
-                    return Ok(val)
+                    Ok(val)
                 }
             }
         } else if src_outer == dst_outer {
@@ -473,57 +530,21 @@ impl Db {
             let src_inner = src_map.determine_map(source);
             let dst_inner = src_map.determine_map(destination);
             let shards = src_map.shards();
+            let src_hash = src_map.hash_usize(&source) as u64;
+            let dst_hash = src_map.hash_usize(&destination) as u64;
+            let hash_fn = |k: &Bytes| src_map.hash_usize(k) as u64;
 
             if src_inner == dst_inner {
-                // 一把写锁
+                // 同一个内部 shard，一把写锁，因为是同一个 shard 不能拆成两个 &mut，所以内联处理
                 let mut shard = shards[src_inner].write();
-                let src_hash = src_map.hash_usize(&source);
-                let dst_hash = src_map.hash_usize(&destination);
-
-                // 先从 source pop
-                let popped = shard
-                    .get_mut(src_hash as u64, |(k, _)| k == source)
-                    .and_then(|(_, v)| {
-                        match v.get_mut().value.as_list_mut() {
-                            Ok(list) => {
-                                if source_left { list.pop_front() } else { list.pop_back() }
-                            }
-                            Err(e) => {
-                                result = Err(e);
-                                None
-                            }
-                        }
-                    });
-
-                if result.is_err() {
-                    return result;
-                }
-
-                let Some(value) = popped else {
-                    return Ok(None);
+                let value = match Self::raw_pop_from_list(&mut shard, src_hash, source, source_left)? {
+                    Some(v) => v,
+                    None => return Ok(None),
                 };
-
-                // 再 push 到 destination
-                match shard.get_mut(dst_hash as u64, |(k, _)| k == destination) {
-                    Some((_, v)) => {
-                        match v.get_mut().value.as_list_mut() {
-                            Ok(list) => {
-                                if dest_left { list.push_front(value.clone()); } else { list.push_back(value.clone()); }
-                            }
-                            Err(e) => return Err(e),
-                        }
-                    }
-                    None => {
-                        // destination 不存在，创建新列表
-                        let mut deque = VecDeque::new();
-                        if dest_left { deque.push_front(value.clone()); } else { deque.push_back(value.clone()); }
-                        let entry = Entry::new(deque, None);
-                        let hash = dst_hash as u64;
-                        shard.insert(hash, (destination.clone(), dashmap::SharedValue::new(entry)), |(k, _)| src_map.hash_usize(k) as u64);
-                    }
-                }
-                return Ok(Some(value));
+                Self::raw_push_to_list(&mut shard, dst_hash, destination, value.clone(), dest_left, hash_fn)?;
+                Ok(Some(value))
             } else {
+                // 不同内部 shard，按序加锁防死锁
                 let (first_idx, second_idx) = if src_inner < dst_inner {
                     (src_inner, dst_inner)
                 } else {
@@ -532,108 +553,25 @@ impl Db {
                 let mut first_lock = shards[first_idx].write();
                 let mut second_lock = shards[second_idx].write();
 
-                // 根据 src_inner 和 dst_inner 的大小关系，确定哪个 lock 对应 source
                 let (src_shard, dst_shard) = if src_inner < dst_inner {
-                    (&mut first_lock, &mut second_lock)
+                    (&mut *first_lock, &mut *second_lock)
                 } else {
-                    (&mut second_lock, &mut first_lock)
+                    (&mut *second_lock, &mut *first_lock)
                 };
-                let src_hash = src_map.hash_usize(&source);
-                let dst_hash = src_map.hash_usize(&destination);
-
-
-                let popped = src_shard
-                    .get_mut(src_hash as u64, |(k, _)| k == source)
-                    .and_then(|(_, v)| {
-                        match v.get_mut().value.as_list_mut() {
-                            Ok(list) => {
-                                if source_left { list.pop_front() } else { list.pop_back() }
-                            }
-                            Err(e) => {
-                                result = Err(e);
-                                None
-                            }
-                        }
-                    });
-
-                if result.is_err() {
-                    return result;
-                }
-
-                let Some(value) = popped else {
-                    return Ok(None);
-                };
-
-                match dst_shard.get_mut(dst_hash as u64, |(k, _)| k == destination) {
-                    Some((_, v)) => {
-                        match v.get_mut().value.as_list_mut() {
-                            Ok(list) => {
-                                if dest_left { list.push_front(value.clone()); } else { list.push_back(value.clone()); }
-                            }
-                            Err(e) => return Err(e),
-                        }
-                    }
-                    None => {
-                        // destination 不存在，创建新列表
-                        let mut deque = VecDeque::new();
-                        if dest_left { deque.push_front(value.clone()); } else { deque.push_back(value.clone()); }
-                        let entry = Entry::new(deque, None);
-                        let hash = dst_hash as u64;
-                        dst_shard.insert(hash, (destination.clone(), dashmap::SharedValue::new(entry)), |(k, _)| src_map.hash_usize(k) as u64);
-                    }
-                }
-                return Ok(Some(value));
+                Self::raw_move_between_shards(src_shard, dst_shard, src_hash, dst_hash, source, destination, source_left, dest_left, hash_fn)
             }
         } else {
-            // 情况3：不同外层 shard，按顺序拿锁
+            // 情况3：不同外层 shard，各自拿锁
             let src_inner = src_map.determine_map(source);
             let dst_inner = dst_map.determine_map(destination);
             let mut src_guard = src_map.shards()[src_inner].write();
             let mut dst_guard = dst_map.shards()[dst_inner].write();
 
-            let src_hash = src_map.hash_usize(&source);
-            let dst_hash = dst_map.hash_usize(&destination);
-            let popped = src_guard
-                    .get_mut(src_hash as u64, |(k, _)| k == source)
-                    .and_then(|(_, v)| {
-                        match v.get_mut().value.as_list_mut() {
-                            Ok(list) => {
-                                if source_left { list.pop_front() } else { list.pop_back() }
-                            }
-                            Err(e) => {
-                                result = Err(e);
-                                None
-                            }
-                        }
-                    });
+            let src_hash = src_map.hash_usize(&source) as u64;
+            let dst_hash = dst_map.hash_usize(&destination) as u64;
+            let hash_fn = |k: &Bytes| dst_map.hash_usize(k) as u64;
 
-            if result.is_err() {
-                return result;
-            }
-
-            let Some(value) = popped else {
-                return Ok(None);
-            };
-
-            match dst_guard.get_mut(dst_hash as u64, |(k, _)| k == destination) {
-                Some((_, v)) => {
-                    match v.get_mut().value.as_list_mut() {
-                        Ok(list) => {
-                            if dest_left { list.push_front(value.clone()); } else { list.push_back(value.clone()); }
-                        }
-                        Err(e) => return Err(e),
-                    }
-                }
-                None => {
-                    // destination 不存在，创建新列表
-                    let mut deque = VecDeque::new();
-                    if dest_left { deque.push_front(value.clone()); } else { deque.push_back(value.clone()); }
-                    let entry = Entry::new(deque, None);
-                    let hash = dst_hash as u64;
-                    dst_guard.insert(hash, (destination.clone(), dashmap::SharedValue::new(entry)), |(k, _)| dst_map.hash_usize(k) as u64);
-                }
-            }
-            return Ok(Some(value));
+            Self::raw_move_between_shards(&mut src_guard, &mut dst_guard, src_hash, dst_hash, source, destination, source_left, dest_left, hash_fn)
         }
     }
 
