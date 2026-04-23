@@ -30,7 +30,7 @@ chrono = "0.4"
 #redis glob风格匹配
 fast-glob = "1.0.1"
 # 线程安全的map, 类似java的ConcurrentHashMap 采用分段锁
-dashmap = "6.1.0"
+dashmap = { version = "6.1.0", features = ["raw-api"] }
 ahash = "0.8.12"
 smallvec = "1"
 
