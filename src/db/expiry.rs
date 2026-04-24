@@ -34,8 +34,7 @@ impl Db {
     pub fn exists(&self, keys: Vec<Bytes>) -> usize {
         let mut count = 0;
         for key in &keys {
-            let idx = self.shard_index(key);
-            if let Some(entry) = self.shards[idx].get(key) {
+            if let Some(entry) = self.shard(key).get(key) {
                 if !entry.is_expired() {
                     count += 1;
                 }
@@ -45,8 +44,7 @@ impl Db {
     }
 
     pub fn ttl(&self, key: &Bytes, return_millis: bool) -> i64 {
-        let idx = self.shard_index(key);
-        let shard = &self.shards[idx];
+        let shard = self.shard(key);
         if let Some(entry) = shard.get(key) {
             return if let Some(ttl) = entry.ttl {
                 if !entry.is_expired() {

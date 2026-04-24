@@ -21,8 +21,6 @@ impl Ping {
     // PING "hello" → 返回 "hello"
 
     pub fn parse(args: &[Frame]) -> Result<Ping> {
-        // args 是除了命令名之外的参数
-        // PING 可以有 0 或 1 个参数
         match args.len() {
             // PING
             0 => Ok(Ping::new(None)),

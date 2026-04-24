@@ -14,7 +14,6 @@ impl CommandCmd {
 
 impl CommandExecute for CommandCmd {
     fn execute(self, _ctx: &Context) -> (Frame, Option<AofEntry>) {
-        // 返回空数组，RedisInsight 能接受
         (Frame::Array(vec![]), None)
     }
 }

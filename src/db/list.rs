@@ -9,8 +9,7 @@ use tokio::sync::oneshot;
 
 impl Db {
     pub fn push(&self, key: Bytes, values: Vec<Bytes>, is_left: bool) -> Result<i64, &'static str> {
-        let idx = self.shard_index(&key);
-        let shard = &self.shards[idx];
+        let shard = self.shard(&key);
 
         let mut result: std::result::Result<i64, &'static str> = Ok(0);
  
@@ -51,8 +50,7 @@ impl Db {
     }
 
     pub fn pushx(&self, key: &Bytes, values: Vec<Bytes>, is_left: bool) -> Result<i64, &'static str> {
-        let idx = self.shard_index(&key);
-        let shard = &self.shards[idx];
+        let shard = self.shard(key);
         match shard.get_mut(key) {
             Some(mut entry) => {
                 entry.value.as_list_mut()
@@ -84,8 +82,7 @@ impl Db {
     /// - key 不存在时返回空 Vec
     /// - 命令层根据调用时是否传入了 count 来决定返回 Integer/Nil 还是 Array
     pub fn pos(&self, key: &Bytes, value: Bytes, rank: Option<i64>, count: Option<u64>, max_len: Option<u64>) -> Result<Vec<i64>, &'static str> {
-        let idx = self.shard_index(&key);
-        let shard = &self.shards[idx];
+        let shard = self.shard(key);
         
         match shard.get(key) {
             Some(entry) => {
@@ -146,8 +143,7 @@ impl Db {
     }
 
     pub fn trim(&self, key: &Bytes, start: i64, stop: i64) -> Result<(), &'static str> {
-        let idx = self.shard_index(&key);
-        let shard = &self.shards[idx];
+        let shard = self.shard(key);
 
         match shard.get_mut(key) {
             Some(mut entry) => {
@@ -183,8 +179,7 @@ impl Db {
     }
 
     pub fn pop(&self, key: &Bytes, is_left: bool) -> Result<Option<Bytes>, &'static str> {
-        let idx = self.shard_index(key);
-        let shard = &self.shards[idx];
+        let shard = self.shard(key);
 
         let mut result: std::result::Result<Option<Bytes>, &'static str> = Ok(None);
 
@@ -209,17 +204,14 @@ impl Db {
     }
 
     pub fn len(&self, key: &Bytes) -> Result<i64, &'static str> {
-        let idx = self.shard_index(key);
-        let shard = &self.shards[idx];
-        shard
+        self.shard(key)
             .get(key)
             .map(|entry| entry.value.as_list().map(|list| list.len() as i64))
             .unwrap_or(Ok(0))
     }
 
     pub fn range(&self, key: &Bytes, start: isize, end: isize) -> Result<Vec<Bytes>, &'static str> {
-        let idx = self.shard_index(key);
-        let shard = &self.shards[idx];
+        let shard = self.shard(key);
 
         match shard.get(key) {
             Some(entry) => match entry.value.as_list() {
@@ -252,8 +244,7 @@ impl Db {
 
 
     pub fn index(&self, key: &Bytes, index: isize) -> Result<Option<Bytes>, &'static str> {
-        let idx = self.shard_index(key);
-        let shard = &self.shards[idx];
+        let shard = self.shard(key);
 
         match shard.get(key) {
             Some(entry) => {
@@ -275,8 +266,7 @@ impl Db {
     }
 
     pub fn lset(&self, key: &Bytes, index: isize, value: Bytes) -> Result<(), &'static str> {
-        let idx = self.shard_index(key);
-        let shard = &self.shards[idx];
+        let shard = self.shard(key);
 
         let mut result: std::result::Result<(), &'static str> = Ok(());
 
@@ -301,8 +291,7 @@ impl Db {
     }
 
     pub fn lrem(&self, key: &Bytes, count: isize, value: Bytes) -> Result<i64, &'static str> {
-        let idx = self.shard_index(key);
-        let shard = &self.shards[idx];
+        let shard = self.shard(key);
 
         let mut result: std::result::Result<i64, &'static str> = Ok(0);
         let mut del_count = 0;
@@ -373,8 +362,7 @@ impl Db {
     }
 
     pub fn linsert(&self, key: &Bytes, is_before: bool, pivot: &Bytes, value: Bytes) -> Result<i64, &'static str> {
-        let idx = self.shard_index(key);
-        let shard = &self.shards[idx];
+        let shard = self.shard(key);
         
         match shard.get_mut(key) {
             Some(mut entry) => {
@@ -403,8 +391,7 @@ impl Db {
     pub async fn bpop(&self, keys: Vec<Bytes>, timeout: u64, is_left: bool) -> Result<Vec<Bytes>, &'static str> {
 
         for key in &keys {
-            let idx = self.shard_index(key);
-            let shard = &self.shards[idx];
+            let shard = self.shard(key);
             match shard.get_mut(key) {
                 Some(mut entry) => {
                     match entry.value.as_list_mut() {

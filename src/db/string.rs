@@ -10,8 +10,7 @@ use super::{Db, Entry, EntryValue};
 
 impl Db {
     pub fn get(&self, key: &Bytes) -> Result<Option<Bytes>, &'static str> {
-        let idx = self.shard_index(key);
-        let shard = &self.shards[idx];
+        let shard = self.shard(key);
         if let Some(entry) = shard.get(key) {
             if !entry.is_expired() {
                 return entry.value.as_string().map(|b| Some(b.clone()));
@@ -30,8 +29,7 @@ impl Db {
         nx: bool,
         xx: bool,
     ) -> Option<()> {
-        let idx = self.shard_index(&key);
-        let shard = &self.shards[idx];
+        let shard = self.shard(&key);
 
         if !nx && !xx {
             let _old_value = shard.insert(key.clone(), Entry::new(value, ttl));
@@ -70,8 +68,7 @@ impl Db {
 
     /// INCR / DECR / INCRBY / DECRBY 通用方法
     pub fn incr_by(&self, key: Bytes, delta: i64) -> Result<i64, &'static str> {
-        let idx = self.shard_index(&key);
-        let shard = &self.shards[idx];
+        let shard = self.shard(&key);
 
         let mut result: Result<i64, &'static str> = Ok(0);
         // [旧方案] let mut guard = self.expiry_indices[idx].lock().unwrap();
@@ -120,8 +117,7 @@ impl Db {
     }
 
     pub fn incr_by_float(&self, key: Bytes, delta: f64) -> Result<Bytes, &'static str> {
-        let idx = self.shard_index(&key);
-        let shard = &self.shards[idx];
+        let shard = self.shard(&key);
 
         let mut result: Result<Bytes, &'static str> = Ok(Bytes::new());
         let mut buffer = [b'0'; lexical_core::BUFFER_SIZE];

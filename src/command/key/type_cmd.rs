@@ -22,13 +22,13 @@ impl TypeCmd {
 
 impl CommandExecute for TypeCmd {
     fn execute(self, ctx: &Context) -> (Frame, Option<AofEntry>) {
-        let idx = ctx.db().shard_index(&self.key);
-        let shard = &ctx.db().shards[idx];
+        let shard = ctx.db().shard(&self.key);
         let type_name = match shard.get(&self.key) {
             Some(entry) if !entry.is_expired() => {
                 match &entry.value {
                     EntryValue::String(_) => "string",
                     EntryValue::List(_) => "list",
+                    EntryValue::Hash(_) => "hash",
                 }
             }
             _ => "none",

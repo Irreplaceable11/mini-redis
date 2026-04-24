@@ -1,43 +1,10 @@
-pub mod ping;
-pub mod set;
 pub mod parse;
-pub mod get;
-pub mod del;
-pub mod exists;
-pub mod ttl;
-pub mod expire;
-pub mod keys;
-pub mod publish;
-pub mod subscribe;
-pub mod unsubscribe;
-mod bgrewriteaof;
-pub mod incr;
-pub mod decr;
-pub mod incrby;
-pub mod decrby;
-mod incrbyfloat;
-mod push;
-pub mod pop;
-mod llen;
-mod lrange;
-mod lindex;
-mod lrem;
-mod lset;
-pub mod scan;
-mod info;
-mod dbsize;
-mod command_cmd;
-mod config;
-mod type_cmd;
-mod select;
-mod client;
-mod hello;
-mod linsert;
-mod pushx;
-mod lpos;
-mod ltrim;
-mod lmove;
-pub mod bpop;
+pub mod string;
+pub mod list;
+pub mod key;
+pub mod pubsub;
+pub mod server;
+pub mod hash;
 
 use crate::aof::AofEntry;
 use crate::frame::Frame;
@@ -46,8 +13,16 @@ use anyhow::Result;
 use bytes::Bytes;
 use smallvec::SmallVec;
 use tracing::info;
+
 // 导出解析辅助函数，供各个命令模块使用
 pub(crate) use parse::{extract_bytes, extract_i64, extract_f64, extract_string};
+
+// re-export 子模块中的类型，保持外部引用兼容
+pub use string::{set, get, incr, decr, incrby, decrby, incrbyfloat};
+pub use list::{push, pushx, pop, bpop, llen, lrange, lindex, lset, lrem, linsert, lpos, ltrim, lmove};
+pub use key::{del, exists, expire, ttl, keys, scan, type_cmd};
+pub use pubsub::{publish, subscribe, unsubscribe};
+pub use server::{ping, select, dbsize, info as info_cmd, config, command_cmd, client, hello, bgrewriteaof};
 
 pub(crate) trait CommandExecute {
     fn execute(self, ctx: &Context) -> (Frame, Option<AofEntry>);
@@ -85,7 +60,7 @@ pub enum Command {
     Unsubscribe(unsubscribe::Unsubscribe),
     BgRewriteAof(bgrewriteaof::BgRewriteAof),
     Scan(scan::Scan),
-    Info(info::Info),
+    Info(info_cmd::Info),
     DbSize(dbsize::DbSize),
     CommandCmd(command_cmd::CommandCmd),
     Config(config::Config),
@@ -111,20 +86,20 @@ impl Command {
             Command::Decr(cmd) => cmd.execute(ctx),
             Command::IncrBy(cmd) => cmd.execute(ctx),
             Command::DecrBy(cmd) => cmd.execute(ctx),
-            Command::IncrByFloat(cmd)  => cmd.execute(ctx),
-            Command::Push(cmd)  => cmd.execute(ctx),
-            Command::Pop(cmd)  => cmd.execute(ctx),
-            Command::Llen(cmd)  => cmd.execute(ctx),
-            Command::Lrange(cmd)  => cmd.execute(ctx),
-            Command::Lindex(cmd)  => cmd.execute(ctx),
-            Command::Lrem(cmd)  => cmd.execute(ctx),
-            Command::Lset(cmd)  => cmd.execute(ctx),
+            Command::IncrByFloat(cmd) => cmd.execute(ctx),
+            Command::Push(cmd) => cmd.execute(ctx),
+            Command::Pop(cmd) => cmd.execute(ctx),
+            Command::Llen(cmd) => cmd.execute(ctx),
+            Command::Lrange(cmd) => cmd.execute(ctx),
+            Command::Lindex(cmd) => cmd.execute(ctx),
+            Command::Lrem(cmd) => cmd.execute(ctx),
+            Command::Lset(cmd) => cmd.execute(ctx),
             Command::Linsert(cmd) => cmd.execute(ctx),
             Command::Pushx(cmd) => cmd.execute(ctx),
             Command::Lpos(cmd) => cmd.execute(ctx),
             Command::Ltrim(cmd) => cmd.execute(ctx),
             Command::Lmove(cmd) => cmd.execute(ctx),
-            Command::Publish(cmd)  => cmd.execute(ctx),
+            Command::Publish(cmd) => cmd.execute(ctx),
             Command::BgRewriteAof(cmd) => cmd.execute(ctx),
             Command::Info(cmd) => cmd.execute(ctx),
             Command::DbSize(cmd) => cmd.execute(ctx),
@@ -141,15 +116,8 @@ impl Command {
     }
 }
 
-
-
 impl Command {
-    
     pub fn from_frame(frame: Frame) -> Result<Command> {
-        // 1. 检查是否是 Array
-        // 2. 提取命令名（第一个元素）
-        // 3. 根据命令名分发到对应模块
-        // 4. 返回 Command 枚举
         let (buf, len, arg) = Command::parse_array(frame)?;
         let cmd_name = &buf[..len];
         match &cmd_name[..] {
@@ -188,7 +156,7 @@ impl Command {
             b"BLPOP" => Ok(Command::BPop(bpop::BPop::parse(&arg, true)?)),
             b"BRPOP" => Ok(Command::BPop(bpop::BPop::parse(&arg, false)?)),
             b"SCAN" => Ok(Command::Scan(scan::Scan::parse(&arg)?)),
-            b"INFO" => Ok(Command::Info(info::Info::parse(&arg)?)),
+            b"INFO" => Ok(Command::Info(info_cmd::Info::parse(&arg)?)),
             b"DBSIZE" => Ok(Command::DbSize(dbsize::DbSize::parse(&arg)?)),
             b"COMMAND" => Ok(Command::CommandCmd(command_cmd::CommandCmd::parse(&arg)?)),
             b"CONFIG" => Ok(Command::Config(config::Config::parse(&arg)?)),
@@ -211,18 +179,14 @@ impl Command {
                     return Err(anyhow::anyhow!("ERR empty command"));
                 }
 
-                // 移除并获取第一个元素
                 let mut iter = arr.into_iter();
                 let cmd_frame = iter.next().expect("checked non-empty");
 
                 let bytes = match cmd_frame {
-                    Frame::BulkString(bytes) => {
-                        bytes
-                    }
+                    Frame::BulkString(bytes) => bytes,
                     _ => return Err(anyhow::anyhow!("ERR invalid command name"))
                 };
 
-                // 栈上 buffer，16 字节足够所有 Redis 命令
                 let mut buf = [0u8; 16];
                 let len = bytes.len().min(16);
 

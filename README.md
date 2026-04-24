@@ -50,11 +50,44 @@ A high-performance Redis server implementation written in Rust for learning purp
 
 ## Supported Commands
 
+### String
+
 | Command | Description |
 |---------|-------------|
-| `PING [message]` | Connection test, returns PONG or echoes message |
 | `SET key value [EX s] [PX ms] [NX\|XX]` | Set key with optional TTL and conditional flags |
 | `GET key` | Get value by key |
+| `INCR key` | Increment integer value by 1 |
+| `DECR key` | Decrement integer value by 1 |
+| `INCRBY key increment` | Increment integer value by given amount |
+| `DECRBY key decrement` | Decrement integer value by given amount |
+| `INCRBYFLOAT key increment` | Increment float value by given amount |
+
+### List
+
+| Command | Description |
+|---------|-------------|
+| `LPUSH key element [element ...]` | Prepend elements to a list |
+| `RPUSH key element [element ...]` | Append elements to a list |
+| `LPOP key [count]` | Remove and return elements from the head of a list |
+| `RPOP key [count]` | Remove and return elements from the tail of a list |
+| `BLPOP key [key ...] timeout` | Blocking left pop |
+| `BRPOP key [key ...] timeout` | Blocking right pop |
+| `LLEN key` | Get the length of a list |
+| `LRANGE key start stop` | Get a range of elements from a list |
+| `LINDEX key index` | Get an element by its index |
+| `LSET key index element` | Set the value of an element by its index |
+| `LREM key count element` | Remove elements from a list |
+| `LINSERT key BEFORE\|AFTER pivot element` | Insert an element before or after another element |
+| `LPUSHX key element [element ...]` | Prepend elements only if the list exists |
+| `RPUSHX key element [element ...]` | Append elements only if the list exists |
+| `LPOS key element [RANK rank] [COUNT count] [MAXLEN len]` | Return the index of matching elements |
+| `LTRIM key start stop` | Trim a list to the specified range |
+| `LMOVE source destination LEFT\|RIGHT LEFT\|RIGHT` | Move an element from one list to another |
+
+### Key
+
+| Command | Description |
+|---------|-------------|
 | `DEL key [key ...]` | Delete one or more keys |
 | `EXISTS key [key ...]` | Check if keys exist |
 | `EXPIRE key seconds` | Set TTL in seconds |
@@ -62,14 +95,29 @@ A high-performance Redis server implementation written in Rust for learning purp
 | `TTL key` | Get remaining TTL in seconds |
 | `PTTL key` | Get remaining TTL in milliseconds |
 | `KEYS pattern` | Find keys matching glob pattern (async via `spawn_blocking` + rayon) |
-| `INCR key` | Increment integer value by 1 |
-| `DECR key` | Decrement integer value by 1 |
-| `INCRBY key increment` | Increment integer value by given amount |
-| `DECRBY key decrement` | Decrement integer value by given amount |
-| `INCRBYFLOAT key increment` | Increment float value by given amount |
+| `SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]` | Incrementally iterate the key space |
+| `TYPE key` | Return the type of the value stored at key |
+
+### Pub/Sub
+
+| Command | Description |
+|---------|-------------|
 | `PUBLISH channel message` | Publish message to channel |
 | `SUBSCRIBE channel [channel ...]` | Subscribe to channels |
 | `UNSUBSCRIBE channel [channel ...]` | Unsubscribe from channels |
+
+### Server
+
+| Command | Description |
+|---------|-------------|
+| `PING [message]` | Connection test, returns PONG or echoes message |
+| `SELECT index` | Select the database (accepted but single-db) |
+| `DBSIZE` | Return the number of keys in the current database |
+| `INFO [section]` | Return server information and statistics |
+| `CONFIG GET parameter` | Get configuration parameters |
+| `COMMAND` | Return information about available commands |
+| `CLIENT` | Client connection management |
+| `HELLO` | Handshake with the server |
 | `BGREWRITEAOF` | Trigger background AOF rewrite |
 
 ## Persistence

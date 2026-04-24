@@ -1,13 +1,14 @@
 mod string;
 mod expiry;
 mod list;
+mod hash;
 
 use bytes::Bytes;
 use dashmap::DashMap;
 use tokio::sync::oneshot;
 use std::collections::{BTreeMap, VecDeque};
 
-use ahash::RandomState;
+use ahash::{HashMap, RandomState};
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::ops::ControlFlow;
 use std::sync::Mutex;
@@ -43,6 +44,20 @@ impl EntryValue {
             _ => Err("WRONGTYPE Operation against a key holding the wrong kind of value"),
         }
     }
+    
+    pub fn as_hash(&self) -> Result<&HashMap<Bytes, Bytes>, &'static str> {
+        match self {
+            EntryValue::Hash(l) => Ok(l),
+            _ => Err("WRONGTYPE Operation against a key holding the wrong kind of value"),
+        }
+    }
+    pub fn as_hash_mut(&mut self) -> Result<&mut HashMap<Bytes, Bytes>, &'static str> {
+        match self {
+            EntryValue::Hash(l) => Ok(l),
+            _ => Err("WRONGTYPE Operation against a key holding the wrong kind of value"),
+        }
+    }
+    
 }
 
 #[derive(Clone)]
@@ -50,6 +65,8 @@ pub enum EntryValue {
     String(Bytes),
 
     List(VecDeque<Bytes>),
+
+    Hash(HashMap<Bytes, Bytes>)
 }
 
 
@@ -62,6 +79,12 @@ impl From<Bytes> for EntryValue {
 impl From<VecDeque<Bytes>> for EntryValue {
     fn from(value: VecDeque<Bytes>) -> Self {
         EntryValue::List(value)
+    }
+}
+
+impl From<HashMap<Bytes, Bytes>> for EntryValue {
+    fn from(value: HashMap<Bytes, Bytes>) -> Self {
+        EntryValue::Hash(value)
     }
 }
 
@@ -111,6 +134,12 @@ impl Db {
         let mut hasher = self.hash_builder.build_hasher();
         key.hash(&mut hasher);
         hasher.finish() as usize & (self.shard_count - 1)
+    }
+
+    /// 根据 key 获取对应的分片引用
+    #[inline]
+    pub(crate) fn shard(&self, key: &Bytes) -> &DashMap<Bytes, Entry> {
+        &self.shards[self.shard_index(key)]
     }
 
     pub fn for_each_entry<F>(&self, mut f: F) -> ControlFlow<anyhow::Error>

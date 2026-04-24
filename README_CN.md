@@ -50,11 +50,44 @@
 
 ## 支持的命令
 
+### 字符串（String）
+
 | 命令 | 说明 |
 |------|------|
-| `PING [message]` | 连接测试，返回 PONG 或回显消息 |
 | `SET key value [EX s] [PX ms] [NX\|XX]` | 设置键值，支持过期时间和条件写入 |
 | `GET key` | 获取键对应的值 |
+| `INCR key` | 将键的整数值加 1 |
+| `DECR key` | 将键的整数值减 1 |
+| `INCRBY key increment` | 将键的整数值增加指定数量 |
+| `DECRBY key decrement` | 将键的整数值减少指定数量 |
+| `INCRBYFLOAT key increment` | 将键的浮点数值增加指定数量 |
+
+### 列表（List）
+
+| 命令 | 说明 |
+|------|------|
+| `LPUSH key element [element ...]` | 从列表头部插入元素 |
+| `RPUSH key element [element ...]` | 从列表尾部插入元素 |
+| `LPOP key [count]` | 从列表头部移除并返回元素 |
+| `RPOP key [count]` | 从列表尾部移除并返回元素 |
+| `BLPOP key [key ...] timeout` | 阻塞式左弹出 |
+| `BRPOP key [key ...] timeout` | 阻塞式右弹出 |
+| `LLEN key` | 获取列表长度 |
+| `LRANGE key start stop` | 获取列表指定范围内的元素 |
+| `LINDEX key index` | 通过索引获取列表中的元素 |
+| `LSET key index element` | 通过索引设置列表元素的值 |
+| `LREM key count element` | 移除列表中的指定元素 |
+| `LINSERT key BEFORE\|AFTER pivot element` | 在指定元素前或后插入元素 |
+| `LPUSHX key element [element ...]` | 仅当列表存在时从头部插入元素 |
+| `RPUSHX key element [element ...]` | 仅当列表存在时从尾部插入元素 |
+| `LPOS key element [RANK rank] [COUNT count] [MAXLEN len]` | 返回匹配元素的索引 |
+| `LTRIM key start stop` | 修剪列表，只保留指定范围内的元素 |
+| `LMOVE source destination LEFT\|RIGHT LEFT\|RIGHT` | 将元素从一个列表移动到另一个列表 |
+
+### 键（Key）
+
+| 命令 | 说明 |
+|------|------|
 | `DEL key [key ...]` | 删除一个或多个键 |
 | `EXISTS key [key ...]` | 检查键是否存在 |
 | `EXPIRE key seconds` | 设置过期时间（秒） |
@@ -62,14 +95,29 @@
 | `TTL key` | 查询剩余过期时间（秒） |
 | `PTTL key` | 查询剩余过期时间（毫秒） |
 | `KEYS pattern` | 按 glob 模式匹配键（通过 `spawn_blocking` + rayon 异步并行扫描） |
-| `INCR key` | 将键的整数值加 1 |
-| `DECR key` | 将键的整数值减 1 |
-| `INCRBY key increment` | 将键的整数值增加指定数量 |
-| `DECRBY key decrement` | 将键的整数值减少指定数量 |
-| `INCRBYFLOAT key increment` | 将键的浮点数值增加指定数量 |
+| `SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]` | 增量迭代键空间 |
+| `TYPE key` | 返回键所存储值的类型 |
+
+### 发布/订阅（Pub/Sub）
+
+| 命令 | 说明 |
+|------|------|
 | `PUBLISH channel message` | 向频道发布消息 |
 | `SUBSCRIBE channel [channel ...]` | 订阅频道 |
 | `UNSUBSCRIBE channel [channel ...]` | 取消订阅频道 |
+
+### 服务器（Server）
+
+| 命令 | 说明 |
+|------|------|
+| `PING [message]` | 连接测试，返回 PONG 或回显消息 |
+| `SELECT index` | 选择数据库（已接受但为单库模式） |
+| `DBSIZE` | 返回当前数据库的键数量 |
+| `INFO [section]` | 返回服务器信息和统计数据 |
+| `CONFIG GET parameter` | 获取配置参数 |
+| `COMMAND` | 返回可用命令信息 |
+| `CLIENT` | 客户端连接管理 |
+| `HELLO` | 与服务器握手 |
 | `BGREWRITEAOF` | 触发后台 AOF 重写 |
 
 ## 持久化

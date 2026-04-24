@@ -56,6 +56,8 @@ pub enum AofEntry {
 
     // source, destination, source_left, dest_left
     Lmove(Bytes, Bytes, bool, bool),
+
+    Hset(Bytes, Vec<(Bytes, Bytes)>),
 }
 
 impl AofEntry {
@@ -334,6 +336,9 @@ impl Aof {
                         }
                         AofEntry::Lmove(src, dst, src_left, dst_left) => {
                             let _ = ctx.db().lmove(&src, &dst, src_left, dst_left);
+                        },
+                        AofEntry::Hset(k, fields) => {
+                            let _ = ctx.db().hset(k, fields);
                         }
                     }
                 }
@@ -373,6 +378,13 @@ impl Aof {
                                     lpush是头插法, 队列先进先出，使用lpush插入时新元素会跑到最里面，所以使用rpush还原
                                 */
                                 AofEntry::Push(key.clone(), values, false);
+                            }
+                            EntryValue::Hash(hash) => {
+                                let mut fields = Vec::with_capacity(hash.len());
+                                for (field, val) in hash {
+                                    fields.push((field.clone(), val.clone()))
+                                }
+                                AofEntry::Hset(key.clone(), fields);
                             }
                         };
                         bincode::serialize_into(&mut pre_allocation, &entry)?;
