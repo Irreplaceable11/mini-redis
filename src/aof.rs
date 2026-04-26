@@ -57,6 +57,7 @@ pub enum AofEntry {
     // source, destination, source_left, dest_left
     Lmove(Bytes, Bytes, bool, bool),
 
+    // key, fields: [(field, value), ...]
     Hset(Bytes, Vec<(Bytes, Bytes)>),
 }
 
@@ -336,7 +337,7 @@ impl Aof {
                         }
                         AofEntry::Lmove(src, dst, src_left, dst_left) => {
                             let _ = ctx.db().lmove(&src, &dst, src_left, dst_left);
-                        },
+                        }
                         AofEntry::Hset(k, fields) => {
                             let _ = ctx.db().hset(k, fields);
                         }

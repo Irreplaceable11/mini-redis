@@ -1,5 +1,5 @@
 use super::{Db, Entry};
-use ahash::{HashMap};
+use ahash::HashMap;
 use anyhow::Result;
 use bytes::Bytes;
 
@@ -30,5 +30,17 @@ impl Db {
                 Entry::new(map, None)
             });
         result
+    }
+
+    pub fn hget(&self, key: &Bytes, field: &Bytes) -> Result<Option<Bytes>, &'static str> {
+        let shard = self.shard(key);
+
+        match shard.get(key) {
+            Some(entry) => {
+                let hash = entry.value.as_hash()?;  // 类型不对直接返回 Err
+                Ok(hash.get(field).cloned())
+            }
+            None => Ok(None)
+        }
     }
 }

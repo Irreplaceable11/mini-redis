@@ -12,3 +12,4 @@
 // 10. HINCRBYFLOAT key field increment        — 字段浮点数自增
 // 11. HSETNX key field value                  — 字段不存在时才设置
 pub mod hset;
+pub mod hget;

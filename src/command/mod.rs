@@ -23,6 +23,7 @@ pub use list::{push, pushx, pop, bpop, llen, lrange, lindex, lset, lrem, linsert
 pub use key::{del, exists, expire, ttl, keys, scan, type_cmd};
 pub use pubsub::{publish, subscribe, unsubscribe};
 pub use server::{ping, select, dbsize, info as info_cmd, config, command_cmd, client, hello, bgrewriteaof};
+pub use hash::{hset, hget};
 
 pub(crate) trait CommandExecute {
     fn execute(self, ctx: &Context) -> (Frame, Option<AofEntry>);
@@ -55,6 +56,8 @@ pub enum Command {
     Lpos(lpos::Lpos),
     Ltrim(ltrim::Ltrim),
     Lmove(lmove::Lmove),
+    Hset(hset::Hset),
+    Hget(hget::Hget),
     Publish(publish::Publish),
     Subscribe(subscribe::Subscribe),
     Unsubscribe(unsubscribe::Unsubscribe),
@@ -99,6 +102,8 @@ impl Command {
             Command::Lpos(cmd) => cmd.execute(ctx),
             Command::Ltrim(cmd) => cmd.execute(ctx),
             Command::Lmove(cmd) => cmd.execute(ctx),
+            Command::Hset(cmd) => cmd.execute(ctx),
+            Command::Hget(cmd) => cmd.execute(ctx),
             Command::Publish(cmd) => cmd.execute(ctx),
             Command::BgRewriteAof(cmd) => cmd.execute(ctx),
             Command::Info(cmd) => cmd.execute(ctx),
@@ -153,6 +158,8 @@ impl Command {
             b"LPOS" => Ok(Command::Lpos(lpos::Lpos::parse(&arg)?)),
             b"LTRIM" => Ok(Command::Ltrim(ltrim::Ltrim::parse(&arg)?)),
             b"LMOVE" => Ok(Command::Lmove(lmove::Lmove::parse(&arg)?)),
+            b"HSET" => Ok(Command::Hset(hset::Hset::parse(&arg)?)),
+            b"HGET" => Ok(Command::Hget(hget::Hget::parse(&arg)?)),
             b"BLPOP" => Ok(Command::BPop(bpop::BPop::parse(&arg, true)?)),
             b"BRPOP" => Ok(Command::BPop(bpop::BPop::parse(&arg, false)?)),
             b"SCAN" => Ok(Command::Scan(scan::Scan::parse(&arg)?)),
