@@ -1,4 +1,4 @@
-use crate::db::{Db, Entry};
+use crate::db::{Db, Entry, EntryValue};
 use anyhow::Result;
 use bytes::Bytes;
 use futures::future::select_all;
@@ -15,7 +15,25 @@ impl Db {
  
         shard
             .entry(key.clone())
-            .and_modify(|entry| match entry.value.as_list_mut() {
+            .and_modify(|entry| {
+                if entry.is_expired() {
+                    let mut new_vec_deque = VecDeque::new();
+                    for ele in &values {
+                        if self.try_notify_waiter(&key, ele) {
+                            continue;
+                        }
+                        if is_left {
+                            new_vec_deque.push_front(ele.clone());
+                        } else {
+                            new_vec_deque.push_back(ele.clone());
+                        }
+                    }
+                    result = Ok(new_vec_deque.len() as i64);
+                    entry.value = EntryValue::List(new_vec_deque);
+                    entry.ttl = None;
+                    return;
+                }
+                match entry.value.as_list_mut() {
                 Ok(list) => {
                     for ele in &values {
                         if self.try_notify_waiter(&key, ele) {
@@ -30,6 +48,7 @@ impl Db {
                     result = Ok(list.len() as i64);
                 }
                 Err(e) => result = Err(e),
+            }
             })
             .or_insert_with(|| {
                 let mut new_vec_deque = VecDeque::new();
@@ -53,6 +72,9 @@ impl Db {
         let shard = self.shard(key);
         match shard.get_mut(key) {
             Some(mut entry) => {
+                if entry.is_expired() {
+                    return Ok(0);
+                }
                 entry.value.as_list_mut()
                     .map(|list| {
                         for val in values {
@@ -86,6 +108,9 @@ impl Db {
         
         match shard.get(key) {
             Some(entry) => {
+                if entry.is_expired() {
+                    return Ok(Vec::new());
+                }
                 match entry.value.as_list() {
                     Ok(list) => {
                         let mut vec = Vec::new();
@@ -147,6 +172,9 @@ impl Db {
 
         match shard.get_mut(key) {
             Some(mut entry) => {
+                if entry.is_expired() {
+                    return Ok(());
+                }
                 match entry.value.as_list_mut() {
                     Ok(list) => {
                         if list.is_empty() {
@@ -184,20 +212,25 @@ impl Db {
         let mut result: std::result::Result<Option<Bytes>, &'static str> = Ok(None);
 
         match shard.get_mut(key) {
-            Some(mut entry) => match entry.value.as_list_mut() {
-                Ok(list) => {
-                    if is_left {
-                        if let Some(val) = list.pop_front() {
-                            result = Ok(Some(val.clone()));
-                        }
-                    } else {
-                        if let Some(val) = list.pop_back() {
-                            result = Ok(Some(val.clone()));
+            Some(mut entry) => {
+                if entry.is_expired() {
+                    return Ok(None);
+                }
+                match entry.value.as_list_mut() {
+                    Ok(list) => {
+                        if is_left {
+                            if let Some(val) = list.pop_front() {
+                                result = Ok(Some(val.clone()));
+                            }
+                        } else {
+                            if let Some(val) = list.pop_back() {
+                                result = Ok(Some(val.clone()));
+                            }
                         }
                     }
+                    Err(e) => result = Err(e),
                 }
-                Err(e) => result = Err(e),
-            },
+            }
             None => {}
         }
         result
@@ -206,7 +239,12 @@ impl Db {
     pub fn len(&self, key: &Bytes) -> Result<i64, &'static str> {
         self.shard(key)
             .get(key)
-            .map(|entry| entry.value.as_list().map(|list| list.len() as i64))
+            .map(|entry| {
+                if entry.is_expired() {
+                    return Ok(0);
+                }
+                entry.value.as_list().map(|list| list.len() as i64)
+            })
             .unwrap_or(Ok(0))
     }
 
@@ -214,30 +252,35 @@ impl Db {
         let shard = self.shard(key);
 
         match shard.get(key) {
-            Some(entry) => match entry.value.as_list() {
-                Ok(list) => {
-                    // 负数索引转换后，如果结果仍然是负数，就裁剪到 0
-                    let len = list.len() as isize;
-                    // 在 isize 层面做 max，然后再转 usize
-                    let start_idx =
-                        max(0isize, if start < 0 { start + len } else { start }) as usize;
-                    let mut end_idx = max(0isize, if end < 0 { end + len } else { end }) as usize;
-                   
-                    if end_idx > (len - 1) as usize {
-                        end_idx = (len - 1) as usize
-                    }    
-                    if start_idx > end_idx {
-                       return Ok(Vec::new())
-                    }
-                   
-                    
-                    Ok(list
-                        .range(start_idx..=end_idx)
-                        .cloned()
-                        .collect::<Vec<Bytes>>())
+            Some(entry) => {
+                if entry.is_expired() {
+                    return Ok(Vec::new());
                 }
-                Err(e) =>  Err(e),
-            },
+                match entry.value.as_list() {
+                    Ok(list) => {
+                        // 负数索引转换后，如果结果仍然是负数，就裁剪到 0
+                        let len = list.len() as isize;
+                        // 在 isize 层面做 max，然后再转 usize
+                        let start_idx =
+                            max(0isize, if start < 0 { start + len } else { start }) as usize;
+                        let mut end_idx = max(0isize, if end < 0 { end + len } else { end }) as usize;
+                       
+                        if end_idx > (len - 1) as usize {
+                            end_idx = (len - 1) as usize
+                        }    
+                        if start_idx > end_idx {
+                           return Ok(Vec::new())
+                        }
+                       
+                        
+                        Ok(list
+                            .range(start_idx..=end_idx)
+                            .cloned()
+                            .collect::<Vec<Bytes>>())
+                    }
+                    Err(e) => Err(e),
+                }
+            }
             None => {Ok(Vec::new())}
         }
     }
@@ -248,6 +291,9 @@ impl Db {
 
         match shard.get(key) {
             Some(entry) => {
+                if entry.is_expired() {
+                    return Ok(None);
+                }
                 match entry.value.as_list() {
                     Ok(list) => {
                         let len = list.len() as isize;
@@ -272,6 +318,9 @@ impl Db {
 
         match shard.get_mut(key) {
             Some(mut entry) => {
+                if entry.is_expired() {
+                    return Err("ERR no such key");
+                }
                 match entry.value.as_list_mut() {
                     Ok(list) => {
                         let len = list.len() as isize;
@@ -298,6 +347,9 @@ impl Db {
         
         match shard.get_mut(key) {
             Some(mut entry) => {
+                if entry.is_expired() {
+                    return Ok(0);
+                }
                 match entry.value.as_list_mut() {
                     Ok(list) => {
                         if count < 0 {
@@ -366,6 +418,9 @@ impl Db {
         
         match shard.get_mut(key) {
             Some(mut entry) => {
+                if entry.is_expired() {
+                    return Ok(0);
+                }
                 match entry.value.as_list_mut(){
                     Ok(list) => {
                         if let Some(index) = list.iter().position(|item| item == pivot) {
@@ -394,6 +449,9 @@ impl Db {
             let shard = self.shard(key);
             match shard.get_mut(key) {
                 Some(mut entry) => {
+                    if entry.is_expired() {
+                        continue;
+                    }
                     match entry.value.as_list_mut() {
                         Ok(list) => {
                             let pop_val = if is_left {list.pop_front()} else {list.pop_back()};
@@ -504,6 +562,9 @@ impl Db {
             match src_map.get_mut(source) {
                 None => Ok(None),
                 Some(mut entry) => {
+                    if entry.is_expired() {
+                        return Ok(None);
+                    }
                     let list = entry.value.as_list_mut()?;
                     let val = if source_left { list.pop_front() } else { list.pop_back() };
                     if let Some(v) = &val {

@@ -84,6 +84,24 @@
 | `LTRIM key start stop` | 修剪列表，只保留指定范围内的元素 |
 | `LMOVE source destination LEFT\|RIGHT LEFT\|RIGHT` | 将元素从一个列表移动到另一个列表 |
 
+### 哈希（Hash）
+
+| 命令 | 说明 |
+|------|------|
+| `HSET key field value [field value ...]` | 设置哈希中一个或多个字段的值 |
+| `HGET key field` | 获取哈希中指定字段的值 |
+| `HMGET key field [field ...]` | 批量获取哈希中多个字段的值 |
+| `HDEL key field [field ...]` | 删除哈希中一个或多个字段 |
+| `HEXISTS key field` | 判断哈希中指定字段是否存在 |
+| `HLEN key` | 获取哈希中字段的数量 |
+| `HGETALL key` | 获取哈希中所有字段和值 |
+| `HKEYS key` | 获取哈希中所有字段名 |
+| `HVALS key` | 获取哈希中所有值 |
+| `HINCRBY key field increment` | 将哈希中指定字段的整数值增加指定数量 |
+| `HINCRBYFLOAT key field increment` | 将哈希中指定字段的浮点数值增加指定数量 |
+| `HSETNX key field value` | 仅当字段不存在时设置字段的值 |
+| `HSCAN key cursor [MATCH pattern] [COUNT count]` | 增量迭代哈希中的字段 |
+
 ### 键（Key）
 
 | 命令 | 说明 |

@@ -23,7 +23,7 @@ pub use list::{push, pushx, pop, bpop, llen, lrange, lindex, lset, lrem, linsert
 pub use key::{del, exists, expire, ttl, keys, scan, type_cmd};
 pub use pubsub::{publish, subscribe, unsubscribe};
 pub use server::{ping, select, dbsize, info as info_cmd, config, command_cmd, client, hello, bgrewriteaof};
-pub use hash::{hset, hget};
+pub use hash::{hset, hget, hscan, hmget, hdel, hexists, hlen, hgetall, hkeys, hincrby, hincrbyfloat, hsetnx};
 
 pub(crate) trait CommandExecute {
     fn execute(self, ctx: &Context) -> (Frame, Option<AofEntry>);
@@ -58,6 +58,16 @@ pub enum Command {
     Lmove(lmove::Lmove),
     Hset(hset::Hset),
     Hget(hget::Hget),
+    Hscan(hscan::Hscan),
+    Hmget(hmget::Hmget),
+    Hdel(hdel::Hdel),
+    Hexists(hexists::Hexists),
+    Hlen(hlen::Hlen),
+    Hgetall(hgetall::Hgetall),
+    Hkeys(hkeys::Hkeys),
+    Hincrby(hincrby::Hincrby),
+    Hincrbyfloat(hincrbyfloat::Hincrbyfloat),
+    Hsetnx(hsetnx::Hsetnx),
     Publish(publish::Publish),
     Subscribe(subscribe::Subscribe),
     Unsubscribe(unsubscribe::Unsubscribe),
@@ -104,6 +114,16 @@ impl Command {
             Command::Lmove(cmd) => cmd.execute(ctx),
             Command::Hset(cmd) => cmd.execute(ctx),
             Command::Hget(cmd) => cmd.execute(ctx),
+            Command::Hscan(cmd) => cmd.execute(ctx),
+            Command::Hmget(cmd) => cmd.execute(ctx),
+            Command::Hdel(cmd) => cmd.execute(ctx),
+            Command::Hexists(cmd) => cmd.execute(ctx),
+            Command::Hlen(cmd) => cmd.execute(ctx),
+            Command::Hgetall(cmd) => cmd.execute(ctx),
+            Command::Hkeys(cmd) => cmd.execute(ctx),
+            Command::Hincrby(cmd) => cmd.execute(ctx),
+            Command::Hincrbyfloat(cmd) => cmd.execute(ctx),
+            Command::Hsetnx(cmd) => cmd.execute(ctx),
             Command::Publish(cmd) => cmd.execute(ctx),
             Command::BgRewriteAof(cmd) => cmd.execute(ctx),
             Command::Info(cmd) => cmd.execute(ctx),
@@ -160,6 +180,17 @@ impl Command {
             b"LMOVE" => Ok(Command::Lmove(lmove::Lmove::parse(&arg)?)),
             b"HSET" => Ok(Command::Hset(hset::Hset::parse(&arg)?)),
             b"HGET" => Ok(Command::Hget(hget::Hget::parse(&arg)?)),
+            b"HSCAN" => Ok(Command::Hscan(hscan::Hscan::parse(&arg)?)),
+            b"HMGET" => Ok(Command::Hmget(hmget::Hmget::parse(&arg)?)),
+            b"HDEL" => Ok(Command::Hdel(hdel::Hdel::parse(&arg)?)),
+            b"HEXISTS" => Ok(Command::Hexists(hexists::Hexists::parse(&arg)?)),
+            b"HLEN" => Ok(Command::Hlen(hlen::Hlen::parse(&arg)?)),
+            b"HGETALL" => Ok(Command::Hgetall(hgetall::Hgetall::parse(&arg)?)),
+            b"HKEYS" => Ok(Command::Hkeys(hkeys::Hkeys::parse(&arg, true)?)),
+            b"HVALS" => Ok(Command::Hkeys(hkeys::Hkeys::parse(&arg, false)?)),
+            b"HINCRBY" => Ok(Command::Hincrby(hincrby::Hincrby::parse(&arg)?)),
+            b"HINCRBYFLOAT" => Ok(Command::Hincrbyfloat(hincrbyfloat::Hincrbyfloat::parse(&arg)?)),
+            b"HSETNX" => Ok(Command::Hsetnx(hsetnx::Hsetnx::parse(&arg)?)),
             b"BLPOP" => Ok(Command::BPop(bpop::BPop::parse(&arg, true)?)),
             b"BRPOP" => Ok(Command::BPop(bpop::BPop::parse(&arg, false)?)),
             b"SCAN" => Ok(Command::Scan(scan::Scan::parse(&arg)?)),

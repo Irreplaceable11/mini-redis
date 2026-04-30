@@ -84,6 +84,24 @@ A high-performance Redis server implementation written in Rust for learning purp
 | `LTRIM key start stop` | Trim a list to the specified range |
 | `LMOVE source destination LEFT\|RIGHT LEFT\|RIGHT` | Move an element from one list to another |
 
+### Hash
+
+| Command | Description |
+|---------|-------------|
+| `HSET key field value [field value ...]` | Set one or more field-value pairs in a hash |
+| `HGET key field` | Get the value of a field in a hash |
+| `HMGET key field [field ...]` | Get the values of multiple fields in a hash |
+| `HDEL key field [field ...]` | Delete one or more fields from a hash |
+| `HEXISTS key field` | Check if a field exists in a hash |
+| `HLEN key` | Get the number of fields in a hash |
+| `HGETALL key` | Get all fields and values in a hash |
+| `HKEYS key` | Get all field names in a hash |
+| `HVALS key` | Get all values in a hash |
+| `HINCRBY key field increment` | Increment the integer value of a field by a given amount |
+| `HINCRBYFLOAT key field increment` | Increment the float value of a field by a given amount |
+| `HSETNX key field value` | Set a field only if it does not already exist |
+| `HSCAN key cursor [MATCH pattern] [COUNT count]` | Incrementally iterate over fields in a hash |
+
 ### Key
 
 | Command | Description |

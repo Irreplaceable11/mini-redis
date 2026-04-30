@@ -13,3 +13,13 @@
 // 11. HSETNX key field value                  — 字段不存在时才设置
 pub mod hset;
 pub mod hget;
+pub mod hscan;
+pub mod hmget;
+pub mod hdel;
+pub mod hexists;
+pub mod hlen;
+pub mod hgetall;
+pub mod hkeys;
+pub mod hincrby;
+pub mod hincrbyfloat;
+pub mod hsetnx;
